@@ -137,9 +137,9 @@ struct CUmodelSettings
 	CSavePackagesSettings SavePackages;
 
 	BEGIN_PROP_TABLE
+		PROP_STRUC(Startup, CStartupSettings)
 		PROP_STRUC(Export, CExportSettings)
 		PROP_STRUC(SavePackages, CSavePackagesSettings)
-//		PROP_STRUC(Startup, CStartupSettings) //!! remove
 		PROP_BOOL(bShowExportOptions)
 		PROP_BOOL(bShowSaveOptions)
 	END_PROP_TABLE

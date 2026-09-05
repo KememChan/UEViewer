@@ -75,6 +75,24 @@ struct FPakEntry
 	int32		CompressionBlockSize;
 	TArray<FPakCompressedBlock> CompressionBlocks;
 	byte		bEncrypted;					// replaced with 'Flags' in UE4.21
+	byte		CustomData;					// WuWa partial encryption flag
+
+	int GetEncryptedLimit() const
+	{
+		if (!bEncrypted) return 0;
+		if (GForceGame == GAME_WutheringWaves)
+		{
+			switch (CustomData)
+			{
+			case 0: return 0x7FFFFFFF;
+			case 1: return 0x200000;
+			case 2: return 0x800;
+			case 4: return 0;
+			default: return 0x7FFFFFFF;
+			}
+		}
+		return 0x7FFFFFFF;
+	}
 
 	uint16		StructSize;					// computed value: size of FPakEntry prepended to each file
 	FPakEntry*	HashNext;					// computed value: used for fast name lookup

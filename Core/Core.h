@@ -366,12 +366,12 @@ FORCEINLINE void* operator new[](size_t size)
 
 FORCEINLINE void operator delete(void* ptr)
 {
-	appFree(ptr);
+	if (ptr) appFree(ptr);
 }
 
 FORCEINLINE void operator delete[](void* ptr)
 {
-	appFree(ptr);
+	if (ptr) appFree(ptr);
 }
 
 #endif // __APPLE__
@@ -380,7 +380,7 @@ FORCEINLINE void operator delete[](void* ptr)
 // C++17 (delete with alignment)
 FORCEINLINE void operator delete(void* ptr, size_t)
 {
-	appFree(ptr);
+	if (ptr) appFree(ptr);
 }
 
 // inplace new

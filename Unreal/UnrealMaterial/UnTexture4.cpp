@@ -24,6 +24,8 @@
 
 #if UNREAL4
 
+static bool GSerializeMipData = true;
+
 void FTexture2DMipMap::Serialize4(FArchive &Ar, FTexture2DMipMap& Mip)
 {
 	guard(FTexture2DMipMap::Serialize4);
@@ -38,7 +40,8 @@ void FTexture2DMipMap::Serialize4(FArchive &Ar, FTexture2DMipMap& Mip)
 	//?? To see the problem (performance problem): load data from pak, modify FPakFile, add logging of
 	//?? Seek() and decompression calls. You'll see that loading of big bulk data chinks is interleaved
 	//?? with reading 4-byte ints at different locations.
-	Mip.Data.Serialize(Ar);
+	if (GSerializeMipData)
+		Mip.Data.Serialize(Ar);
 
 #if BORDERLANDS3
 	if (Ar.Game == GAME_Borderlands3)
@@ -87,6 +90,7 @@ struct FTexturePlatformData
 		// see TextureDerivedData.cpp, SerializePlatformData()
 		guard(FTexturePlatformData<<);
 		Ar << D.SizeX << D.SizeY << D.NumSlices;
+		bool bHasOptData = (D.NumSlices & (1 << 30)) != 0;
 		D.NumSlices &= 0x3fffffff; // 2 higher bits are BitMask_CubeMap and BitMask_HasOptData since UE4.24
 
 #if GEARS4
@@ -101,6 +105,12 @@ struct FTexturePlatformData
 		Ar << D.PixelFormat;
 
 	after_pixel_format:
+		if (bHasOptData)
+		{
+			uint32 ExtData, NumMipsInTail;
+			Ar << ExtData << NumMipsInTail;
+		}
+
 		int32 FirstMip;
 		Ar << FirstMip;					// only for cooked, but we don't read FTexturePlatformData for non-cooked textures
 		DBG("   SizeX=%d SizeY=%d NumSlices=%d PixelFormat=%s FirstMip=%d\n", D.SizeX, D.SizeY, D.NumSlices, *D.PixelFormat, FirstMip);
@@ -181,19 +191,50 @@ void UTexture2D::Serialize4(FArchive& Ar)
 
 	if (bCooked)
 	{
+		bool bSerializeMipData = true;
+#if WUTHERING_WAVES
+		if (Ar.Game == GAME_WutheringWaves)
+		{
+			int savePos = Ar.Tell();
+			int32 dX = 0, dY = 0, dZ = 0;
+			Ar << dX << dY << dZ;
+			Ar.Seek(savePos);
+			if (dX > 0 && dY == 0 && dZ > 0)
+			{
+				bSerializeMipData = true;
+			}
+			else
+			{
+				int32 bMipDataInt = 0;
+				Ar << bMipDataInt;
+				bSerializeMipData = (bMipDataInt != 0);
+			}
+		}
+#endif
+		GSerializeMipData = bSerializeMipData;
+
 		FName PixelFormatEnum;
 		Ar << PixelFormatEnum;
 		while (stricmp(PixelFormatEnum, "None") != 0)
 		{
 			DBG("  PixelFormat: %s\n", *PixelFormatEnum);
-			int32 SkipOffset;
-			Ar << SkipOffset;
+			int64 SkipOffset;
 			if (Ar.Game >= GAME_UE4(20))
 			{
-				int32 SkipOffsetH;
-				Ar << SkipOffsetH;
-				assert(SkipOffsetH == 0);
+				Ar << SkipOffset;
 			}
+			else
+			{
+				int32 SkipOffset32;
+				Ar << SkipOffset32;
+				SkipOffset = SkipOffset32;
+			}
+#if WUTHERING_WAVES
+			if (Ar.Game == GAME_WutheringWaves)
+			{
+				SkipOffset = Ar.Tell() + SkipOffset;
+			}
+#endif
 
 			EPixelFormat PixelFormat = (EPixelFormat)NameToEnum("EPixelFormat", PixelFormatEnum);
 
@@ -207,7 +248,10 @@ void UTexture2D::Serialize4(FArchive& Ar)
 			#if SEAOFTHIEVES
 				if (Ar.Game == GAME_SeaOfThieves) Ar.Seek(Ar.Tell() + 4);
 			#endif
-				assert(Ar.Tell() == SkipOffset);
+				if (Ar.Tell() != SkipOffset)
+				{
+					Ar.Seek(SkipOffset);
+				}
 				// copy data to UTexture2D
 				Exchange(Mips, Data.Mips);		// swap arrays to avoid copying
 				SizeX = Data.SizeX;
@@ -220,9 +264,74 @@ void UTexture2D::Serialize4(FArchive& Ar)
 				appPrintf("Skipping data for format %s\n", PixelFormatEnum.Str);
 				Ar.Seek(SkipOffset);
 			}
+			if (Ar.IsStopper() || (Ar.GetStopper() != 0 && Ar.Tell() >= Ar.GetStopper()))
+				break;
 			// read next format name
 			Ar << PixelFormatEnum;
 		}
+
+#if WUTHERING_WAVES
+		if (Ar.Game == GAME_WutheringWaves && !bSerializeMipData)
+		{
+			const UnPackage* Pkg = Ar.CastTo<UnPackage>();
+			if (!Pkg && UObject::GLoadingObj) Pkg = UObject::GLoadingObj->Package;
+			if (Pkg)
+			{
+				for (int e = 0; e < Pkg->Summary.ExportCount; e++)
+				{
+					const FObjectExport& exp = Pkg->GetExport(e);
+					if (!strcmp(Pkg->GetObjectName(exp.ClassIndex), "OodleTextureStorageProviderFactory"))
+					{
+						int savePos = Ar.Tell();
+						Ar.Seek(exp.SerialOffset);
+						// Skip unversioned header and bSerializeGuid (12 bytes)
+						byte header[12];
+						Ar.Serialize(header, 12);
+						FName PFN;
+						Ar << PFN;
+						while (stricmp(PFN, "None") != 0)
+						{
+							int64 SkipOff;
+							Ar << SkipOff;
+							int32 NumMips;
+							Ar << NumMips;
+							Mips.Empty(NumMips);
+							for (int m = 0; m < NumMips; m++)
+							{
+								FTexture2DMipMap* Mip = new (Mips) FTexture2DMipMap;
+								int32 sx, sy, sz;
+								Ar << sx << sy << sz;
+								Mip->SizeX = sx;
+								Mip->SizeY = sy;
+								int32 bOodle;
+								Ar << bOodle;
+								Mip->bIsOodle = bOodle;
+								if (bOodle)
+								{
+									int32 ver = 0;
+									Ar << ver << Mip->OodleFlags;
+									for (int k = 0; k < 10; k++) Ar << Mip->OodleModes[k];
+								}
+								Mip->Data.Serialize(Ar);
+							}
+							Ar << PFN;
+						}
+						int32 TextureIndex;
+						Ar << TextureIndex;
+						if (Mips.Num() > 0)
+						{
+							SizeX = Mips[0].SizeX;
+							SizeY = Mips[0].SizeY;
+						}
+						Ar.Seek(savePos);
+						break;
+					}
+				}
+			}
+		}
+#endif
+
+		GSerializeMipData = true;
 	}
 	else if (SourceArt.BulkData != NULL)
 	{

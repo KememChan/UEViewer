@@ -969,6 +969,215 @@ protected:
 #endif // HAS_UI
 
 
+// Session cache for animations per skeleton: SkeletonName -> list of CGameFileInfo
+struct FSkeletonAnimCacheEntry
+{
+	FString SkeletonName;
+	TArray<const CGameFileInfo*> Files;
+};
+static TArray<FSkeletonAnimCacheEntry> GSkeletonAnimCache;
+static bool GAllGameAnimsIndexed = false;
+
+static void RegisterSkeletonAnimFile(const char* skeletonName, const CGameFileInfo* file)
+{
+	if (!skeletonName || !skeletonName[0]) return;
+	for (int i = 0; i < GSkeletonAnimCache.Num(); i++)
+	{
+		if (!stricmp(*GSkeletonAnimCache[i].SkeletonName, skeletonName))
+		{
+			if (file && GSkeletonAnimCache[i].Files.FindItem(file) < 0)
+			{
+				GSkeletonAnimCache[i].Files.Add(file);
+			}
+			return;
+		}
+	}
+	int idx = GSkeletonAnimCache.AddDefaulted();
+	GSkeletonAnimCache[idx].SkeletonName = skeletonName;
+	if (file)
+	{
+		GSkeletonAnimCache[idx].Files.Add(file);
+	}
+}
+
+// Extract character root folder and search tokens from skeleton path and skeleton name
+static void ExtractCharacterScope(const char* skelFolderPath, const char* lookupSkeletonName,
+	char* outCharRootDir, int maxRootDirLen,
+	char* outCharName, int maxCharNameLen,
+	char* outSkelToken, int maxTokenLen)
+{
+	outCharRootDir[0] = 0;
+	outCharName[0] = 0;
+	outSkelToken[0] = 0;
+
+	// 1. Split skelFolderPath into segments
+	if (skelFolderPath && skelFolderPath[0])
+	{
+		char pathCopy[1024];
+		appStrncpyz(pathCopy, skelFolderPath, ARRAY_COUNT(pathCopy));
+		int pathLen = strlen(pathCopy);
+		// Strip trailing slashes
+		while (pathLen > 0 && (pathCopy[pathLen - 1] == '/' || pathCopy[pathLen - 1] == '\\'))
+		{
+			pathCopy[--pathLen] = 0;
+		}
+
+		// Collect segments
+		const char* segments[32];
+		int numSegments = 0;
+		char* cur = pathCopy;
+		while (*cur && numSegments < 32)
+		{
+			while (*cur == '/' || *cur == '\\') cur++;
+			if (!*cur) break;
+			segments[numSegments] = cur;
+			while (*cur && *cur != '/' && *cur != '\\') cur++;
+			if (*cur)
+			{
+				*cur = 0;
+				cur++;
+			}
+			numSegments++;
+		}
+
+		static const char* const s_GenericLeafFolders[] = {
+			"model", "models", "mesh", "meshes", "skeletalmesh", "skeleton", "skeletons",
+			"anim", "anims", "animation", "animations", "commonanim", "texture", "textures",
+			"material", "materials", "physics", "physic"
+		};
+
+		static const char* const s_StructuralFolders[] = {
+			"content", "aki", "character", "characters", "role", "roles",
+			"monster", "monsters", "boss", "weapon", "weapons", "prop", "props",
+			"npc", "npcs", "common",
+			"femalexl", "femalez", "femalem", "females",
+			"malexl", "malez", "malem", "males"
+		};
+
+		auto IsGenericLeaf = [](const char* name) -> bool {
+			for (int k = 0; k < ARRAY_COUNT(s_GenericLeafFolders); k++)
+				if (!stricmp(name, s_GenericLeafFolders[k])) return true;
+			return false;
+		};
+
+		auto IsStructural = [](const char* name) -> bool {
+			for (int k = 0; k < ARRAY_COUNT(s_StructuralFolders); k++)
+				if (!stricmp(name, s_StructuralFolders[k])) return true;
+			return false;
+		};
+
+		// Walk backwards to find character folder
+		int charSegIdx = -1;
+		for (int i = numSegments - 1; i >= 0; i--)
+		{
+			if (IsGenericLeaf(segments[i]))
+				continue;
+			if (IsStructural(segments[i]))
+				break;
+
+			// If this segment is a model code (e.g. starts with R2T1, R1T1, MB1, EF) or contains "Md10",
+			// and its parent is not structural, prefer the parent as the character folder
+			bool isModelCode = (!strnicmp(segments[i], "R1T", 3) ||
+			                    !strnicmp(segments[i], "R2T", 3) ||
+			                    !strnicmp(segments[i], "MB", 2) ||
+			                    !strnicmp(segments[i], "ME", 2) ||
+			                    !strnicmp(segments[i], "EF", 2) ||
+			                    !strnicmp(segments[i], "Seq_", 4) ||
+			                    appStristr(segments[i], "Md10") != NULL ||
+			                    appStristr(segments[i], "Md00") != NULL);
+
+			if (isModelCode && i > 0 && !IsStructural(segments[i - 1]) && !IsGenericLeaf(segments[i - 1]))
+			{
+				charSegIdx = i - 1;
+				break;
+			}
+
+			charSegIdx = i;
+			break;
+		}
+
+		if (charSegIdx >= 0)
+		{
+			appStrncpyz(outCharName, segments[charSegIdx], maxCharNameLen);
+
+			// Reconstruct outCharRootDir
+			outCharRootDir[0] = 0;
+			for (int i = 0; i <= charSegIdx; i++)
+			{
+				int curLen = strlen(outCharRootDir);
+				appSprintf(outCharRootDir + curLen, maxRootDirLen - curLen, "/%s", segments[i]);
+			}
+		}
+		else if (numSegments > 0)
+		{
+			appStrncpyz(outCharName, segments[numSegments - 1], maxCharNameLen);
+			appStrncpyz(outCharRootDir, skelFolderPath, maxRootDirLen);
+		}
+	}
+
+	// 2. Extract clean token from skeleton name
+	if (lookupSkeletonName && lookupSkeletonName[0])
+	{
+		char tokenBuf[128];
+		appStrncpyz(tokenBuf, lookupSkeletonName, ARRAY_COUNT(tokenBuf));
+
+		// Strip "_Skeleton" or "Skeleton" suffix
+		int len = strlen(tokenBuf);
+		if (len > 9 && !stricmp(tokenBuf + len - 9, "_Skeleton"))
+			tokenBuf[len - 9] = 0;
+		else if (len > 8 && !stricmp(tokenBuf + len - 8, "Skeleton"))
+			tokenBuf[len - 8] = 0;
+
+		// Strip "Md10011", "Md00411", etc. suffix
+		char* mdPtr = const_cast<char*>(appStristr(tokenBuf, "Md"));
+		if (mdPtr && mdPtr != tokenBuf)
+		{
+			bool allDigits = true;
+			for (char* d = mdPtr + 2; *d; d++)
+			{
+				if (*d < '0' || *d > '9') { allDigits = false; break; }
+			}
+			if (allDigits) *mdPtr = 0;
+		}
+
+		// Strip common prefixes
+		const char* tokenStart = tokenBuf;
+		if (!strnicmp(tokenStart, "R1T1", 4) || !strnicmp(tokenStart, "R1T2", 4) ||
+		    !strnicmp(tokenStart, "R2T1", 4) || !strnicmp(tokenStart, "R2T2", 4))
+		{
+			tokenStart += 4;
+		}
+		else if (!strnicmp(tokenStart, "Seq_", 4))
+		{
+			tokenStart += 4;
+		}
+		else if (!strnicmp(tokenStart, "BP_", 3) || !strnicmp(tokenStart, "SK_", 3))
+		{
+			tokenStart += 3;
+		}
+		else if ((!strnicmp(tokenStart, "MB", 2) || !strnicmp(tokenStart, "ME", 2)) && tokenStart[2] >= '0' && tokenStart[2] <= '9')
+		{
+			tokenStart += 2;
+			while (*tokenStart >= '0' && *tokenStart <= '9') tokenStart++;
+		}
+		else if (!strnicmp(tokenStart, "EF", 2))
+		{
+			tokenStart += 2;
+		}
+
+		if (strlen(tokenStart) >= 3)
+		{
+			appStrncpyz(outSkelToken, tokenStart, maxTokenLen);
+		}
+	}
+
+	// Fallback token to charName if token couldn't be extracted from skeleton
+	if (!outSkelToken[0] && outCharName[0])
+	{
+		appStrncpyz(outSkelToken, outCharName, maxTokenLen);
+	}
+}
+
 // Find animations for currently selected skeleton
 void CSkelMeshViewer::FindUE4Animations()
 {
@@ -984,74 +1193,431 @@ void CSkelMeshViewer::FindUE4Animations()
 		return;
 	}
 
-	// Find all packages
-	TArray<const CGameFileInfo*> PackageInfos;
-	appEnumGameFiles<TArray<const CGameFileInfo*> >( // won't compile with lambda without explicitly providing template argument
-		[](const CGameFileInfo* file, TArray<const CGameFileInfo*>& param) -> bool
-		{
-			if (file->IsPackage())
-				param.Add(file);
-			return true;
-		}, PackageInfos);
-
-	UIProgressDialog progress;
-	progress.Show("Finding animations");
-	progress.SetDescription("Scanning package");
-
-	// Perform full scan to be able to locate AnimSequence objects
-	if (!ScanContent(PackageInfos, &progress))
+	// If animations for this skeleton are already converted and attached, don't rescan
+	if (Skeleton->ConvertedAnim && Skeleton->ConvertedAnim->Sequences.Num() > 0)
 	{
-		appPrintf("Interrupted by user\n");
 		return;
 	}
 
-	// Find potential uasset files with animations
-	TArray<UnPackage*> packagesToLoad;
-	packagesToLoad.Empty(256);
-
 	const char* lookupSkeletonName = Skeleton->Name;
-	for (int i = 0; i < PackageInfos.Num(); i++)
-	{
-		const CGameFileInfo* info = PackageInfos[i];
-		UnPackage* package = info->Package;
-		if (!package)
-		{
-			// Shouldn't happen, but happens (ScanPackage() should fill Package for all CGameFileInfo).
-			// Example of appearance: ScanPackages may open a WRONG find in a case when game files are extracted from pak, and
-			// user supplies wrong (shorter) game path, e.g. -path=Extported/Meshes, and multiple files with the same name
-			// exists inside that folder. CGameFileInfo::Find has heuristic for finding files using partial path, but it may fail.
-			// In this case, CGameFileInfo will say "it's package", but actually file won't be scanned and/or loaded.
-			//appNotify("Strange package: IsPackage=true, Package is NULL: %s (size %d Kb)", *info->GetRelativeName(), info->SizeInKb + info->ExtraSizeInKb);
-			continue;
-		}
+	const CGameFileInfo* skelFileInfo = Skeleton->Package ? Skeleton->Package->FileInfo : NULL;
+	int skelFolderIndex = skelFileInfo ? skelFileInfo->FolderIndex : -1;
+	const FString* skelFolderPathPtr = skelFileInfo ? &skelFileInfo->GetPath() : NULL;
+	const char* skelFolderPath = skelFolderPathPtr ? **skelFolderPathPtr : "";
+	int skelFolderLen = strlen(skelFolderPath);
 
-		bool found = false;
-		for (int importIndex = 0; importIndex < package->Summary.ImportCount; importIndex++)
+	// Extract robust character root scope and tokens
+	char charRootDir[512];
+	char charName[128];
+	char skelToken[128];
+	ExtractCharacterScope(skelFolderPath, lookupSkeletonName,
+		charRootDir, ARRAY_COUNT(charRootDir),
+		charName, ARRAY_COUNT(charName),
+		skelToken, ARRAY_COUNT(skelToken));
+
+	int charRootDirLen = strlen(charRootDir);
+	int charNameLen = strlen(charName);
+	int skelTokenLen = strlen(skelToken);
+	bool useCharNameMatch = (charNameLen >= 3);
+	bool useTokenMatch = (skelTokenLen >= 3 && stricmp(skelToken, charName) != 0);
+
+	UIProgressDialog progress;
+	progress.Show("Finding animations");
+
+	TArray<UnPackage*> packagesToLoad;
+	packagesToLoad.Empty(512);
+
+	bool bCacheHit = false;
+
+	// Check if we already scanned and cached animation files for this skeleton in this session
+	for (int c = 0; c < GSkeletonAnimCache.Num(); c++)
+	{
+		if (!stricmp(*GSkeletonAnimCache[c].SkeletonName, lookupSkeletonName))
 		{
-			FObjectImport& imp = package->GetImport(importIndex);
-			const char* ObjectClass = *imp.ClassName;
-			const char* ObjectName = *imp.ObjectName;
-			if (!stricmp(ObjectClass, "Skeleton") && !stricmp(ObjectName, lookupSkeletonName))
+			bCacheHit = true;
+			const TArray<const CGameFileInfo*>& cachedFiles = GSkeletonAnimCache[c].Files;
+			for (int i = 0; i < cachedFiles.Num(); i++)
 			{
-				// This uasset refers to the Skeleton object with the same name, check if this
-				// is an exactly the same Skeleton object as we're using
-				const char* referencedFilename = package->GetObjectPackageName(imp.PackageIndex);
-				const CGameFileInfo* referencedFile = CGameFileInfo::Find(referencedFilename);
-				if (Skeleton->Package->FileInfo == referencedFile)
+				const CGameFileInfo* file = cachedFiles[i];
+				if (!file) continue;
+				UnPackage* package = file->Package;
+				if (!package)
 				{
-					found = true;
+					package = UnPackage::LoadPackage(file, /*silent=*/true);
+					if (!package) continue;
+				}
+				packagesToLoad.Add(package);
+				package->CloseReader();
+			}
+			break;
+		}
+	}
+
+	if (!bCacheHit)
+	{
+		// Pre-compute excluded folders to filter out UI, Audio, Video, Level/Map, FX, Config, Materials, etc.
+		int numFolders = appGetGameFolderCount();
+		TArray<bool> folderExcluded;
+		folderExcluded.AddZeroed(numFolders);
+
+		static const char* const s_ExcludedFolderKeywords[] = {
+			"/ui/",
+			"/audio/",
+			"/sound/",
+			"/sounds/",
+			"/wwise/",
+			"/akaudio/",
+			"/movies/",
+			"/movie/",
+			"/video/",
+			"/scene/",
+			"/scenes/",
+			"/levels/",
+			"/maps/",
+			"/world/",
+			"/landscape/",
+			"/foliage/",
+			"/effect/",
+			"/effects/",
+			"/particle/",
+			"/particles/",
+			"/niagara/",
+			"/config/",
+			"/configdb/",
+			"/engine/",
+			"/materials/",
+			"/material/",
+			"/shaders/",
+			"/font/",
+			"/fonts/",
+			"/localization/",
+			"/localize/",
+			"/l10n/",
+			"/widget/",
+			"/wbp/",
+			"/umg/",
+			"/table/",
+			"/tables/",
+			"/datatable/",
+			"/datatables/"
+		};
+
+		for (int f = 0; f < numFolders; f++)
+		{
+			if (f == skelFolderIndex)
+			{
+				folderExcluded[f] = false;
+				continue;
+			}
+
+			const FString& folderPath = CGameFileInfo::GetPathByIndex(f);
+			char wrappedPath[1024];
+			appSprintf(ARRAY_ARG(wrappedPath), "/%s/", *folderPath);
+
+			for (int k = 0; k < ARRAY_COUNT(s_ExcludedFolderKeywords); k++)
+			{
+				if (appStristr(wrappedPath, s_ExcludedFolderKeywords[k]))
+				{
+					folderExcluded[f] = true;
 					break;
 				}
 			}
 		}
 
-		if (!found) continue; // this package doesn't use our Skeleton
-
-		// Now, if this package has animation sequence - enqueue it for loading
-		if (PackageInfos[i]->NumAnimations)
+		// Collect candidate packages, partitioning into Tier 1 (targeted character folder) and Tier 2 (other game folders)
+		struct CandidateContext
 		{
-			packagesToLoad.Add(package);
+			const TArray<bool>* folderExcluded;
+			int skelFolderIndex;
+			const char* skelFolderPath;
+			int skelFolderLen;
+			const char* charRootDir;
+			int charRootDirLen;
+			const char* charName;
+			bool useCharNameMatch;
+			const char* skelToken;
+			bool useTokenMatch;
+			const char* lookupSkeletonName;
+			TArray<const CGameFileInfo*> priorityCandidates;
+			TArray<const CGameFileInfo*> otherCandidates;
+		};
+
+		CandidateContext ctx;
+		ctx.folderExcluded = &folderExcluded;
+		ctx.skelFolderIndex = skelFolderIndex;
+		ctx.skelFolderPath = skelFolderPath;
+		ctx.skelFolderLen = skelFolderLen;
+		ctx.charRootDir = charRootDir;
+		ctx.charRootDirLen = charRootDirLen;
+		ctx.charName = charName;
+		ctx.useCharNameMatch = useCharNameMatch;
+		ctx.skelToken = skelToken;
+		ctx.useTokenMatch = useTokenMatch;
+		ctx.lookupSkeletonName = lookupSkeletonName;
+		ctx.priorityCandidates.Empty(1024);
+		ctx.otherCandidates.Empty(4096);
+
+		appEnumGameFiles<CandidateContext>(
+			[](const CGameFileInfo* file, CandidateContext& param) -> bool
+			{
+				if (!file->IsPackage())
+					return true;
+
+				if (file->FolderIndex < param.folderExcluded->Num() && (*param.folderExcluded)[file->FolderIndex])
+					return true;
+
+				if (file->IsPackageScanned && file->NumAnimations == 0)
+					return true;
+
+				static const char* const s_ExcludedPrefixes[] = {
+					"MI_",
+					"MIC_",
+					"MF_",
+					"MPC_",
+					"SM_",
+					"DM_",
+					"WBP_",
+					"WB_",
+					"DT_",
+					"DA_",
+					"Curve_",
+					"FloatCurve_",
+					"NS_",
+					"FX_",
+					"BP_FX_"
+				};
+
+				const char* cleanName = file->GetCleanFilename();
+				for (int p = 0; p < ARRAY_COUNT(s_ExcludedPrefixes); p++)
+				{
+					int len = strlen(s_ExcludedPrefixes[p]);
+					if (!strnicmp(cleanName, s_ExcludedPrefixes[p], len))
+						return true;
+				}
+
+				bool isPriority = false;
+				if (file->FolderIndex == param.skelFolderIndex)
+				{
+					isPriority = true;
+				}
+				else
+				{
+					const FString& folderPathStr = CGameFileInfo::GetPathByIndex(file->FolderIndex);
+					const char* folderPath = *folderPathStr;
+
+					// 1. Subfolder of the character root directory (e.g. /Game/Aki/Character/Role/FemaleZ/Fuludelisi/CommonAnim)
+					if (param.charRootDirLen > 0 && !strnicmp(folderPath, param.charRootDir, param.charRootDirLen))
+					{
+						char nextChar = folderPath[param.charRootDirLen];
+						if (nextChar == '/' || nextChar == '\\' || nextChar == 0)
+							isPriority = true;
+					}
+
+					// 2. Subfolder of the skeleton folder (if different)
+					if (!isPriority && param.skelFolderLen > 0 && !strnicmp(folderPath, param.skelFolderPath, param.skelFolderLen))
+					{
+						char nextChar = folderPath[param.skelFolderLen];
+						if (nextChar == '/' || nextChar == '\\' || nextChar == 0)
+							isPriority = true;
+					}
+
+					// 3. Folder or filename contains character name (e.g. "Fuludelisi" in /Game/Aki/Sequence/.../Fuludelisi/...)
+					if (!isPriority && param.useCharNameMatch)
+					{
+						if (appStristr(folderPath, param.charName) || appStristr(cleanName, param.charName))
+							isPriority = true;
+					}
+
+					// 4. Folder or filename contains skeleton token
+					if (!isPriority && param.useTokenMatch)
+					{
+						if (appStristr(folderPath, param.skelToken) || appStristr(cleanName, param.skelToken))
+							isPriority = true;
+					}
+
+					// 5. Filename contains skeleton name
+					if (!isPriority && appStristr(cleanName, param.lookupSkeletonName))
+					{
+						isPriority = true;
+					}
+				}
+
+				if (isPriority)
+				{
+					param.priorityCandidates.Add(file);
+				}
+				else
+				{
+					param.otherCandidates.Add(file);
+				}
+				return true;
+			}, ctx);
+
+		auto ScanCandidateList = [&](const TArray<const CGameFileInfo*>& fileList, const char* desc) -> bool
+		{
+			progress.SetDescription(desc);
+			for (int i = 0; i < fileList.Num(); i++)
+			{
+				const CGameFileInfo* file = fileList[i];
+
+				if (!progress.Progress(file->GetCleanFilename(), i, fileList.Num()))
+				{
+					appPrintf("Cancelled by user\n");
+					return false;
+				}
+
+				if (file->IsPackageScanned && file->NumAnimations == 0)
+					continue;
+
+				UnPackage* package = file->Package;
+				bool wasLoaded = (package != NULL);
+
+				if (!package)
+				{
+					package = UnPackage::LoadPackage(file, /*silent=*/true);
+					if (!package) continue;
+				}
+
+				// Fast NameTable short-circuit:
+				// Must contain AnimSequence or Animation in NameTable
+				if (!package->ContainsName("AnimSequence", true) && !package->ContainsName("Animation", true))
+				{
+					const_cast<CGameFileInfo*>(file)->IsPackageScanned = true;
+					const_cast<CGameFileInfo*>(file)->NumAnimations = 0;
+					if (!wasLoaded)
+					{
+						UnPackage::UnloadPackage(package);
+					}
+					continue;
+				}
+
+				// Find which skeleton this animation package imports
+				const char* importedSkelName = NULL;
+				for (int importIndex = 0; importIndex < package->Summary.ImportCount; importIndex++)
+				{
+					FObjectImport& imp = package->GetImport(importIndex);
+					if (!stricmp(*imp.ClassName, "Skeleton"))
+					{
+						importedSkelName = *imp.ObjectName;
+						break;
+					}
+				}
+
+				if (importedSkelName)
+				{
+					// Register into global skeleton anim cache
+					RegisterSkeletonAnimFile(importedSkelName, file);
+				}
+
+				// Check if this package belongs to our requested skeleton
+				bool skeletonMatch = false;
+				if (importedSkelName && !stricmp(importedSkelName, lookupSkeletonName))
+				{
+					skeletonMatch = true;
+				}
+				else if (package->ContainsName(lookupSkeletonName, /*bIgnoreCase=*/true))
+				{
+					for (int importIndex = 0; importIndex < package->Summary.ImportCount; importIndex++)
+					{
+						FObjectImport& imp = package->GetImport(importIndex);
+						if (!stricmp(*imp.ClassName, "Skeleton") && !stricmp(*imp.ObjectName, lookupSkeletonName))
+						{
+							skeletonMatch = true;
+							break;
+						}
+					}
+				}
+
+				if (!skeletonMatch)
+				{
+					if (!wasLoaded)
+					{
+						UnPackage::UnloadPackage(package);
+					}
+					continue;
+				}
+
+				// Verify that package actually exports an animation sequence
+				bool hasAnimExport = false;
+				for (int expIdx = 0; expIdx < package->Summary.ExportCount; expIdx++)
+				{
+					const char* ObjectClass = package->GetClassNameFor(package->GetExport(expIdx));
+					if (!stricmp(ObjectClass, "AnimSequence") || !stricmp(ObjectClass, "Animation"))
+					{
+						hasAnimExport = true;
+						break;
+					}
+				}
+
+				if (!hasAnimExport)
+				{
+					const_cast<CGameFileInfo*>(file)->IsPackageScanned = true;
+					const_cast<CGameFileInfo*>(file)->NumAnimations = 0;
+					if (!wasLoaded)
+					{
+						UnPackage::UnloadPackage(package);
+					}
+					continue;
+				}
+
+				// Matched! Add to load queue and close reader handle
+				packagesToLoad.Add(package);
+				package->CloseReader();
+
+				const_cast<CGameFileInfo*>(file)->IsPackageScanned = true;
+				const_cast<CGameFileInfo*>(file)->NumAnimations = 1;
+			}
+			return true;
+		};
+
+		// Stage 1: Scan targeted character folder and subfolders first (typically ~200-500 files, takes < 0.2s)
+		if (ctx.priorityCandidates.Num() > 0)
+		{
+			if (!ScanCandidateList(ctx.priorityCandidates, "Scanning character animations"))
+				return;
 		}
+
+		// Stage 2: Only if no animations were found in character folders and all-game scan hasn't run once yet
+		if (packagesToLoad.Num() == 0 && !GAllGameAnimsIndexed && ctx.otherCandidates.Num() > 0)
+		{
+			// Filter otherCandidates to candidate animation folders only
+			TArray<const CGameFileInfo*> animCandidates;
+			animCandidates.Empty(2048);
+			for (int i = 0; i < ctx.otherCandidates.Num(); i++)
+			{
+				const CGameFileInfo* f = ctx.otherCandidates[i];
+				const FString& path = CGameFileInfo::GetPathByIndex(f->FolderIndex);
+				const char* pathStr = *path;
+				if (appStristr(pathStr, "anim") || appStristr(pathStr, "sequence") ||
+				    appStristr(pathStr, "character") || appStristr(pathStr, "player") ||
+				    appStristr(pathStr, "monster") || appStristr(pathStr, "npc") ||
+				    appStristr(pathStr, "weapon") || appStristr(pathStr, "prop"))
+				{
+					animCandidates.Add(f);
+				}
+			}
+
+			if (animCandidates.Num() > 0)
+			{
+				if (!ScanCandidateList(animCandidates, "Scanning animations"))
+					return;
+			}
+			GAllGameAnimsIndexed = true;
+		}
+
+		// Ensure entry exists in GSkeletonAnimCache for lookupSkeletonName (even if 0 found) so we never rescan
+		RegisterSkeletonAnimFile(lookupSkeletonName, NULL);
+		for (int i = 0; i < packagesToLoad.Num(); i++)
+		{
+			if (packagesToLoad[i]->FileInfo)
+				RegisterSkeletonAnimFile(lookupSkeletonName, packagesToLoad[i]->FileInfo);
+		}
+	}
+
+	if (packagesToLoad.Num() == 0)
+	{
+		appPrintf("No animations found for skeleton %s\n", lookupSkeletonName);
+		return;
 	}
 
 	// Sort packages by name for easier navigation after loading
@@ -1066,9 +1632,11 @@ void CSkelMeshViewer::FindUE4Animations()
 	{
 		guard(Load);
 		UnPackage* package = packagesToLoad[i];
-		if (!progress.Progress(*package->GetFilename(), i, packagesToLoad.Num()))
+		const char* cleanName = package->FileInfo ? package->FileInfo->GetCleanFilename() : *package->GetFilename();
+		if (!progress.Progress(cleanName, i, packagesToLoad.Num()))
 			break;
 		LoadWholePackage(package);
+		package->CloseReader();
 		unguardf("%d/%d", i, packagesToLoad.Num());
 	}
 

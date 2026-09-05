@@ -1212,10 +1212,6 @@ void FByteBulkData::SerializeHeader(FArchive &Ar)
 		}
 		UnPackage* Package = Ar.CastTo<UnPackage>();
 		assert(Package);
-	#if DEBUG_BULK
-		appPrintf("BulkHdrEndPos: %X, %d elements x %d bytes, Flags=%X, DataPos=pkg(%llX)+%llX, DiskSize=%X\n",
-			Ar.Tell(), ElementCount, GetElementSize(), BulkDataFlags, Package->Summary.BulkDataStartOffset, BulkDataOffsetInFile, BulkDataSizeOnDisk);
-	#endif
 		if (!(BulkDataFlags & BULKDATA_NoOffsetFixUp)) // UE4.26 flag
 		{
 			BulkDataOffsetInFile += Package->Summary.BulkDataStartOffset;
@@ -1596,7 +1592,7 @@ bool FByteBulkData::SerializeData(const UObject* MainObj) const
 #if UNREAL4
 	guard(FByteBulkData::SerializeData(UObject*));
 
-	assert(bIsUE4Data); // the function is supported only for UE4 games
+	if (!bIsUE4Data) return false;
 
 	if (!(BulkDataFlags & (BULKDATA_OptionalPayload|BULKDATA_PayloadInSeperateFile)))
 	{

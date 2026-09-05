@@ -36,12 +36,18 @@ while [ "$1" ]; do
 			single_file=${2//\\//}
 			shift 2
 			;;
+		--dist-dir)
+			dist_dir=$2
+			shift 2
+			;;
 		*)
-			echo "Usage: build.sh [--debug] [--profile] [--vc <version>] [--64] [--exe <file.exe>] [--file <cpp file>]"
+			echo "Usage: build.sh [--debug] [--profile] [--vc <version>] [--64] [--exe <file.exe>] [--file <cpp file>] [--dist-dir <dir>]"
 			exit
 			;;
 	esac
 done
+
+[ -z "$dist_dir" ] && dist_dir="dist"
 
 
 function DebugPrint()
@@ -265,7 +271,26 @@ case "$PLATFORM" in
 	osx)
 		make -f $makefile $target || exit 1
 		;;
-	*)
-		echo "Unknown PLATFORM=\"$PLATFORM\""
-		exit 1
 esac
+
+# Package to dist directory for easy shipping
+if [ -z "$single_file" ] && [ "$is_default_project" ]; then
+	mkdir -p "$dist_dir"
+	if [ -f "$ExeName.exe" ]; then
+		cp -f "$ExeName.exe" "$dist_dir/"
+		echo "Copied $ExeName.exe -> $dist_dir/"
+	fi
+	if [ "$PLATFORM" == "vc-win64" ]; then
+		[ -f libs/SDL2/x64/SDL2.dll ] && cp -f libs/SDL2/x64/SDL2.dll "$dist_dir/SDL2_64.dll"
+		[ -f oo2core_9_win64.dll ] && cp -f oo2core_9_win64.dll "$dist_dir/"
+	else
+		[ -f libs/SDL2/x86/SDL2.dll ] && cp -f libs/SDL2/x86/SDL2.dll "$dist_dir/SDL2.dll"
+		[ -f oo2core_9_win32.dll ] && cp -f oo2core_9_win32.dll "$dist_dir/"
+	fi
+	[ -f keys.json ] && cp -f keys.json "$dist_dir/"
+	[ -f run_wuwa.bat ] && cp -f run_wuwa.bat "$dist_dir/"
+	[ -f LICENSE.txt ] && cp -f LICENSE.txt "$dist_dir/"
+	[ -f readme.txt ] && cp -f readme.txt "$dist_dir/"
+	echo "Distribution ready in $dist_dir/"
+fi
+

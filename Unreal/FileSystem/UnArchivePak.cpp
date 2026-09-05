@@ -170,6 +170,18 @@ void FPakEntry::DecodeFrom(const uint8* Data)
 	uint32 Bitfield = *(uint32*)Data;
 	Data += sizeof(uint32);
 
+	if (GForceGame == GAME_WutheringWaves)
+	{
+		Bitfield = ((Bitfield >> 16) & 0x3F) | ((Bitfield & 0xFFFF) << 6) | ((Bitfield & (1 << 28)) >> 6) |
+		           ((Bitfield & 0x0FC00000) << 1) | ((Bitfield & 0xC0000000) >> 1) | ((Bitfield & 0x20000000) << 2);
+		CustomData = *Data;
+		Data += sizeof(uint8);
+	}
+	else
+	{
+		CustomData = 0;
+	}
+
 	// CompressionBlockSize
 	bool bLegacyCompressionBlockSize = ((Bitfield & 0x3f) != 0x3f);
 	if (!bLegacyCompressionBlockSize)
@@ -210,6 +222,11 @@ void FPakEntry::DecodeFrom(const uint8* Data)
 		Data += sizeof(uint64);
 	}
 
+	if (GForceGame == GAME_WutheringWaves)
+	{
+		Exchange(Pos, UncompressedSize);
+	}
+
 	// Size field
 	if (CompressionMethod)
 	{
@@ -248,7 +265,11 @@ void FPakEntry::DecodeFrom(const uint8* Data)
 	if (BlockCount)
 	{
 		// Adjust CompressionBlockSize for small blocks
-		if (UncompressedSize < CompressionBlockSize)
+		if (BlockCount == 1)
+		{
+			CompressionBlockSize = UncompressedSize;
+		}
+		else if (UncompressedSize < CompressionBlockSize)
 		{
 			// UE4.27+ code
 			CompressionBlockSize = UncompressedSize;
@@ -260,7 +281,7 @@ void FPakEntry::DecodeFrom(const uint8* Data)
 		}
 
 		// CompressionBlocks
-		if (BlockCount == 1)
+		if (BlockCount == 1 && !bEncrypted)
 		{
 			FPakCompressedBlock& Block = CompressionBlocks[0];
 			Block.CompressedStart = Pos + StructSize;
@@ -356,7 +377,27 @@ void FPakFile::Serialize(void *data, int size)
 					Reader->Seek64(Block.CompressedStart);
 					Reader->Serialize(CompressedData, EncryptedSize);
 					FileRequiresAesKey();
-					Parent->DecryptDataBlock(CompressedData, EncryptedSize);
+
+					int Limit = Info->GetEncryptedLimit();
+					if (Limit < 0x7FFFFFFF)
+					{
+						int PrevEncryptedBytes = 0;
+						for (int i = 0; i < BlockIndex; i++)
+						{
+							int PrevBlockSize = (int)(Info->CompressionBlocks[i].CompressedEnd - Info->CompressionBlocks[i].CompressedStart);
+							PrevEncryptedBytes += Align(PrevBlockSize, (int)EncryptionAlign);
+						}
+						int BlockLimit = max(0, Limit - PrevEncryptedBytes);
+						if (BlockLimit > 0)
+						{
+							int DecryptSize = min(EncryptedSize, Align(BlockLimit, (int)EncryptionAlign));
+							Parent->DecryptDataBlock(CompressedData, DecryptSize);
+						}
+					}
+					else
+					{
+						Parent->DecryptDataBlock(CompressedData, EncryptedSize);
+					}
 				}
 				appDecompress(CompressedData, CompressedBlockSize, UncompressedBuffer, UncompressedBlockSize, Info->CompressionMethod);
 				appFree(CompressedData);
@@ -403,7 +444,13 @@ void FPakFile::Serialize(void *data, int size)
 				RemainingSize = Align(RemainingSize, EncryptionAlign); // align for AES, pak contains aligned data
 				Reader->Serialize(UncompressedBuffer, RemainingSize);
 				FileRequiresAesKey();
-				Parent->DecryptDataBlock(UncompressedBuffer, RemainingSize);
+
+				int Limit = Info->GetEncryptedLimit();
+				if (UncompressedBufferPos < Limit)
+				{
+					int DecryptSize = min(RemainingSize, Align(Limit - UncompressedBufferPos, (int)EncryptionAlign));
+					Parent->DecryptDataBlock(UncompressedBuffer, DecryptSize);
+				}
 			}
 
 			// Now copy decrypted data from UncompressedBuffer (code is very similar to those used in decompression above)
@@ -1008,8 +1055,14 @@ bool FPakVFS::LoadPakIndex(FArchive* reader, const FPakInfo& info, FString& erro
 
 			// Convert compression method
 			int32 CompressionMethodIndex = E.CompressionMethod;
-			assert(CompressionMethodIndex >= 0 && CompressionMethodIndex <= 4);
-			E.CompressionMethod = CompressionMethodIndex > 0 ? info.CompressionMethods[CompressionMethodIndex-1] : 0;
+			if (CompressionMethodIndex > 0 && CompressionMethodIndex <= ARRAY_COUNT(info.CompressionMethods))
+			{
+				E.CompressionMethod = info.CompressionMethods[CompressionMethodIndex-1];
+			}
+			else
+			{
+				E.CompressionMethod = 0;
+			}
 
 			// Register the file
 			CRegisterFileInfo reg;

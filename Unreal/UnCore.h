@@ -152,6 +152,11 @@ public:
 		return ShortFilename + ExtensionOffset;
 	}
 
+	FORCEINLINE const char* GetCleanFilename() const
+	{
+		return ShortFilename;
+	}
+
 	// Get full name of the file
 	void GetRelativeName(FString& OutName) const;
 	FString GetRelativeName() const;

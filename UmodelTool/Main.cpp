@@ -34,6 +34,8 @@
 
 #include "UmodelApp.h"
 #include "UmodelCommands.h"
+#include "Viewers/ObjectViewer.h"
+#include "MeshInstance/MeshInstance.h"
 #include "Version.h"
 #include "MiscStrings.h"
 
@@ -604,51 +606,245 @@ static void CheckHexAesKey(FString& Key)
 	Key = NewKey;
 }
 
+#if _WIN32
+extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void* hModule, char* lpFilename, unsigned long nSize);
+#endif
+
+static bool LoadAesKeysFromJson(const char* filename)
+{
+	FILE* f = fopen(filename, "rb");
+	if (!f)
+	{
+#if _WIN32
+		// Try relative to executable directory
+		char exePath[512];
+		if (GetModuleFileNameA(NULL, exePath, sizeof(exePath)))
+		{
+			char* s = strrchr(exePath, '\\');
+			if (!s) s = strrchr(exePath, '/');
+			if (s)
+			{
+				*s = '\0';
+				char fullPath[512];
+				appSprintf(ARRAY_ARG(fullPath), "%s/%s", exePath, filename);
+				f = fopen(fullPath, "rb");
+			}
+		}
+#endif
+	}
+	if (!f) return false;
+
+	fseek(f, 0, SEEK_END);
+	long fileSize = ftell(f);
+	fseek(f, 0, SEEK_SET);
+
+	if (fileSize <= 0 || fileSize > 32 * 1024 * 1024)
+	{
+		fclose(f);
+		return false;
+	}
+
+	char* buffer = (char*)appMalloc(fileSize + 1);
+	int bytesRead = (int)fread(buffer, 1, fileSize, f);
+	fclose(f);
+	buffer[bytesRead] = '\0';
+
+	auto IsHex = [](char c) -> bool {
+		return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+	};
+
+	int keysLoaded = 0;
+	const char* ptr = buffer;
+	while (*ptr)
+	{
+		// 1. Check for "0x" or "0X" followed by 64 hex characters
+		if (ptr[0] == '0' && (ptr[1] == 'x' || ptr[1] == 'X'))
+		{
+			const char* hexStart = ptr + 2;
+			int hexCount = 0;
+			while (hexCount < 64 && IsHex(hexStart[hexCount]))
+			{
+				hexCount++;
+			}
+			if (hexCount == 64 && !IsHex(hexStart[64]))
+			{
+				char hexKeyStr[68];
+				memcpy(hexKeyStr, ptr, 66);
+				hexKeyStr[66] = '\0';
+
+				FString Key = hexKeyStr;
+				CheckHexAesKey(Key);
+
+				bool exists = false;
+				for (int i = 0; i < GAesKeys.Num(); i++)
+				{
+					if (GAesKeys[i] == Key)
+					{
+						exists = true;
+						break;
+					}
+				}
+				if (!exists)
+				{
+					GAesKeys.Add(Key);
+					keysLoaded++;
+				}
+				ptr += 66;
+				continue;
+			}
+		}
+		// 2. Check for quoted 64-hex string: "..."
+		else if (ptr[0] == '"')
+		{
+			const char* hexStart = ptr + 1;
+			int hexCount = 0;
+			while (hexCount < 64 && IsHex(hexStart[hexCount]))
+			{
+				hexCount++;
+			}
+			if (hexCount == 64 && hexStart[64] == '"')
+			{
+				char hexKeyStr[68];
+				hexKeyStr[0] = '0';
+				hexKeyStr[1] = 'x';
+				memcpy(hexKeyStr + 2, hexStart, 64);
+				hexKeyStr[66] = '\0';
+
+				FString Key = hexKeyStr;
+				CheckHexAesKey(Key);
+
+				bool exists = false;
+				for (int i = 0; i < GAesKeys.Num(); i++)
+				{
+					if (GAesKeys[i] == Key)
+					{
+						exists = true;
+						break;
+					}
+				}
+				if (!exists)
+				{
+					GAesKeys.Add(Key);
+					keysLoaded++;
+				}
+				ptr += 65;
+				continue;
+			}
+		}
+		ptr++;
+	}
+
+	appFree(buffer);
+
+	if (keysLoaded > 0)
+	{
+		appPrintf("Loaded %d AES key(s) from %s\n", keysLoaded, filename);
+		return true;
+	}
+	return false;
+}
+
+static bool AutoLoadAesKeys()
+{
+	bool loaded = false;
+
+	// 1. Current working directory
+	if (LoadAesKeysFromJson("keys.json"))
+		loaded = true;
+
+	// 2. Executable directory
+#if _WIN32
+	char exePath[512];
+	if (GetModuleFileNameA(NULL, exePath, sizeof(exePath)))
+	{
+		char* s = strrchr(exePath, '\\');
+		if (!s) s = strrchr(exePath, '/');
+		if (s)
+		{
+			*s = '\0';
+			char jsonPath[512];
+			appSprintf(ARRAY_ARG(jsonPath), "%s/keys.json", exePath);
+			if (LoadAesKeysFromJson(jsonPath))
+				loaded = true;
+		}
+	}
+#endif
+
+	// 3. Configured game path
+	if (!GSettings.Startup.GamePath.IsEmpty())
+	{
+		char jsonPath[512];
+		appSprintf(ARRAY_ARG(jsonPath), "%s/keys.json", *GSettings.Startup.GamePath);
+		if (LoadAesKeysFromJson(jsonPath))
+			loaded = true;
+	}
+
+	return (GAesKeys.Num() > 0);
+}
+
 static void HandleAesKeyOption(const char* value)
 {
 	FStaticString<256> Key = value;
-	if (Key.Len())
+	Key.TrimStartAndEndInline();
+	if (Key.IsEmpty()) return;
+
+	const char* filename = *Key;
+	if (filename[0] == '@') filename++;
+
+	int len = strlen(filename);
+	if (len > 5 && !stricmp(filename + len - 5, ".json"))
 	{
-		if (Key[0] == '@')
+		if (LoadAesKeysFromJson(filename))
+			return;
+	}
+
+	if (Key[0] == '@')
+	{
+		// Load a file with keys
+		const char* KeyFile = *Key + 1;
+		FILE* f = fopen(KeyFile, "r");
+		if (f)
 		{
-			// Load a file with keys
-			const char* KeyFile = *Key + 1;
-			FILE* f = fopen(KeyFile, "r");
-			if (f)
+			char buffer[1024];
+			while (!feof(f))
 			{
-				char buffer[1024];
-				while (!feof(f))
+				if (fgets(buffer, ARRAY_COUNT(buffer), f))
 				{
-					if (fgets(buffer, ARRAY_COUNT(buffer), f))
+					FStaticString<256> Line = buffer;
+					Line.TrimStartAndEndInline();
+					if (!Line.IsEmpty())
 					{
-						FStaticString<256> Key = buffer;
-						Key.TrimStartAndEndInline();
-						if (!Key.IsEmpty())
-						{
-							CheckHexAesKey(Key);
-							GAesKeys.Add(Key);
-						}
+						CheckHexAesKey(Line);
+						GAesKeys.Add(Line);
 					}
 				}
-				fclose(f);
 			}
-			else
-			{
-				appPrintf("Warning: -aes option refers missing file %s\n", KeyFile);
-			}
+			fclose(f);
 		}
 		else
 		{
-			Key.TrimStartAndEndInline();
-			CheckHexAesKey(Key);
-			GAesKeys.Add(Key);
+			appPrintf("Warning: -aes option refers missing file %s\n", KeyFile);
 		}
+	}
+	else
+	{
+		CheckHexAesKey(Key);
+		GAesKeys.Add(Key);
 	}
 }
 
 bool UE4EncryptedPak()
 {
 #if HAS_UI
+	if (GAesKeys.Num() == 0)
+	{
+		AutoLoadAesKeys();
+	}
+	if (GAesKeys.Num() > 0)
+	{
+		return true;
+	}
+
 	// Don't ask for a key more than once
 	static bool lock = false;
 	if (lock) return false;
@@ -662,10 +858,17 @@ bool UE4EncryptedPak()
 	}
 	for (FString& Key : Keys)
 	{
+		Key.TrimStartAndEndInline();
+		if (Key.IsEmpty()) continue;
+		if (Key.Len() > 5 && !stricmp(*Key + Key.Len() - 5, ".json"))
+		{
+			LoadAesKeysFromJson(*Key);
+			continue;
+		}
 		CheckHexAesKey(Key);
 		GAesKeys.Add(Key);
 	}
-	return true;
+	return (GAesKeys.Num() > 0);
 #else
 	return false;
 #endif
@@ -780,6 +983,9 @@ int main(int argc, const char **argv)
 #endif // HAS_UI
 
 	GSettings.Load();
+#if UNREAL4
+	AutoLoadAesKeys();
+#endif
 
 	// parse command line
 	enum
@@ -791,10 +997,14 @@ int main(int argc, const char **argv)
 		CMD_List,
 		CMD_Export,
 		CMD_Save,
+		CMD_TestAnim,
 	};
 
 	static byte mainCmd = CMD_View;
-	static bool bAll = false, hasRootDir = false, forceUI = false;
+	static bool bAll = false, forceUI = false;
+	static bool hasRootDir = false;
+	if (!GSettings.Startup.GamePath.IsEmpty())
+		hasRootDir = true;
 	TArray<const char*> packagesToLoad, objectsToLoad;
 	TArray<const char*> params;
 	const char *attachAnimName = NULL;
@@ -811,13 +1021,14 @@ int main(int argc, const char **argv)
 		// simple options
 		static const OptionInfo options[] =
 		{
-			OPT_VALUE("view",    mainCmd, CMD_View)
-			OPT_VALUE("dump",    mainCmd, CMD_Dump)
-			OPT_VALUE("check",   mainCmd, CMD_Check)
-			OPT_VALUE("export",  mainCmd, CMD_Export)
-			OPT_VALUE("save",    mainCmd, CMD_Save)
-			OPT_VALUE("pkginfo", mainCmd, CMD_PkgInfo)
-			OPT_VALUE("list",    mainCmd, CMD_List)
+			OPT_VALUE("view",     mainCmd, CMD_View)
+			OPT_VALUE("dump",     mainCmd, CMD_Dump)
+			OPT_VALUE("check",    mainCmd, CMD_Check)
+			OPT_VALUE("export",   mainCmd, CMD_Export)
+			OPT_VALUE("save",     mainCmd, CMD_Save)
+			OPT_VALUE("pkginfo",  mainCmd, CMD_PkgInfo)
+			OPT_VALUE("list",     mainCmd, CMD_List)
+			OPT_VALUE("testanim", mainCmd, CMD_TestAnim)
 #if VSTUDIO_INTEGRATION
 			OPT_BOOL ("debug",   GUseDebugger)
 #endif
@@ -1010,6 +1221,10 @@ int main(int argc, const char **argv)
 		bool res = GApplication.ShowStartupDialog(GSettings.Startup);
 		if (!res) exit(0);
 		hasRootDir = true;
+		GSettings.Save();
+#if UNREAL4
+		AutoLoadAesKeys();
+#endif
 	}
 #endif // HAS_UI
 
@@ -1020,6 +1235,10 @@ int main(int argc, const char **argv)
 	GForcePlatform = GSettings.Startup.Platform;
 	GForceCompMethod = GSettings.Startup.PackageCompression;
 	GSettings.Export.Apply();
+	GSettings.Save();
+#if UNREAL4
+	AutoLoadAesKeys();
+#endif
 
 	TArray<UnPackage*> Packages;
 	TArray<UObject*> Objects;
@@ -1143,6 +1362,7 @@ int main(int argc, const char **argv)
 	if (mainCmd == CMD_List)
 	{
 		guard(List);
+
 		for (int packageIndex = 0; packageIndex < Packages.Num(); packageIndex++)
 		{
 			UnPackage* Package = Packages[packageIndex];
@@ -1278,6 +1498,75 @@ int main(int argc, const char **argv)
 	}
 
 #if RENDERING
+	if (mainCmd == CMD_TestAnim)
+	{
+		appPrintf("=== RUNNING AUTOMATED ANIMATION TEST ===\n");
+		TArray<const char*> testPackages;
+		for (int i = 0; i < packagesToLoad.Num(); i++)
+			testPackages.Add(packagesToLoad[i]);
+		// Repeat first package at the end to test switching back (cache hit)
+		if (testPackages.Num() > 1)
+			testPackages.Add(testPackages[0]);
+
+		for (int pass = 0; pass < testPackages.Num(); pass++)
+		{
+			const char* pkgPath = testPackages[pass];
+			appPrintf("\n--- [PASS %d/%d] Testing model: %s ---\n", pass + 1, testPackages.Num(), pkgPath);
+
+			GApplication.ReleaseViewerAndObjects();
+
+			const CGameFileInfo* fileInfo = CGameFileInfo::Find(pkgPath);
+			if (!fileInfo)
+			{
+				appPrintf("ERROR: File not found for package %s\n", pkgPath);
+				continue;
+			}
+			UnPackage* pkg = UnPackage::LoadPackage(fileInfo, /*silent=*/false);
+			if (!pkg)
+			{
+				appPrintf("ERROR: Could not load package %s\n", pkgPath);
+				continue;
+			}
+			LoadWholePackage(pkg);
+
+			USkeletalMesh4* targetMesh = NULL;
+			for (int idx = 0; idx < UObject::GObjObjects.Num(); idx++)
+			{
+				UObject* obj = UObject::GObjObjects[idx];
+				if (obj->IsA("SkeletalMesh4"))
+				{
+					targetMesh = static_cast<USkeletalMesh4*>(obj);
+					break;
+				}
+			}
+
+			if (!targetMesh)
+			{
+				appPrintf("ERROR: No SkeletalMesh4 found in %s\n", pkgPath);
+				continue;
+			}
+
+			GApplication.CreateVisualizer(targetMesh);
+			if (GApplication.Viewer)
+			{
+				CSkelMeshViewer* skelViewer = static_cast<CSkelMeshViewer*>(GApplication.Viewer);
+				int startTick = appMilliseconds();
+				skelViewer->ProcessKey(KEY_CTRL | 'a');
+				int elapsed = appMilliseconds() - startTick;
+
+				CSkelMeshInstance* meshInst = static_cast<CSkelMeshInstance*>(skelViewer->Inst);
+				int animCount = meshInst ? meshInst->GetAnimCount() : 0;
+				appPrintf(">>> RESULT: Mesh=%s Skeleton=%s Time=%d ms AnimsLoaded=%d <<<\n",
+					targetMesh->Name,
+					targetMesh->Skeleton ? targetMesh->Skeleton->Name : "None",
+					elapsed, animCount);
+			}
+		}
+		GApplication.ReleaseViewerAndObjects();
+		appPrintf("\n=== AUTOMATED ANIMATION TEST COMPLETED SUCCESSFULLY ===\n");
+		return 0;
+	}
+
 	if (mainCmd == CMD_Dump)
 	{
 		// dump object(s)

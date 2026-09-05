@@ -54,7 +54,17 @@ echo [3/3] Compiling umodel_64.exe...
 set PATH=%BUILDTOOLS_DIR%\bin;%PATH%
 bash build.sh --64
 
-if exist "umodel_64.exe" (
+if exist "dist\umodel_64.exe" (
+    echo.
+    echo ========================================================
+    echo   BUILD SUCCESSFUL!
+    echo   Shippable package is ready in .\dist\ folder:
+    echo     - dist\umodel_64.exe
+    echo     - dist\SDL2_64.dll
+    echo     - dist\oo2core_9_win64.dll
+    echo     - dist\keys.json
+    echo ========================================================
+) else if exist "umodel_64.exe" (
     echo.
     echo ========================================================
     echo   BUILD SUCCESSFUL: umodel_64.exe is ready!

@@ -4,6 +4,7 @@
 #include "UnMaterial.h"
 #include "UnMaterial3.h"
 #include "UnrealPackage/UnPackage.h"
+#include "BC7PrepDecoder.h"
 
 
 /*-----------------------------------------------------------------------------
@@ -1030,7 +1031,28 @@ bool UTexture2D::GetTextureData(CTextureData &TexData) const
 			}
 			// this mipmap has data
 			CMipMap* DstMip = new (TexData.Mips) CMipMap;
-			DstMip->SetBulkData(Bulk);
+#if WUTHERING_WAVES
+			if (Mip.bIsOodle)
+			{
+				int numBlocks = ((Mip.SizeX + 3) / 4) * ((Mip.SizeY + 3) / 4);
+				int decodedSize = numBlocks * 16;
+				byte* decodedData = (byte*)appMalloc(decodedSize);
+				if (DecodeBC7Prep(Bulk.BulkData, Bulk.ElementCount, Mip.OodleModes, Mip.OodleFlags, decodedData, decodedSize))
+				{
+					DstMip->SetOwnedDataBuffer(decodedData, decodedSize);
+				}
+				else
+				{
+					appPrintf("WARNING: DecodeBC7Prep failed for %s mip %d\n", Name, mipLevel);
+					appFree(decodedData);
+					DstMip->SetBulkData(Bulk);
+				}
+			}
+			else
+#endif
+			{
+				DstMip->SetBulkData(Bulk);
+			}
 			// Note: UE3 can store incorrect SizeX/SizeY for lowest mips - these values could have 4x4 for all smaller mips
 			// (perhaps minimal size of DXT block). So compute mip size by ourselves.
 			DstMip->USize = max(1, OrigUSize >> mipLevel);

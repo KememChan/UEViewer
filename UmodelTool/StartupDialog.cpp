@@ -25,6 +25,10 @@ bool UIStartupDialog::Show()
 	{
 		Opt.GameOverride = GAME_UNKNOWN;
 	}
+	else
+	{
+		Opt.GameOverride = OverrideGameCombo->GetSelectionValue();
+	}
 
 	return true;
 }
@@ -77,12 +81,16 @@ void UIStartupDialog::InitUI()
 		}
 	}
 
-	// select a game passed through the command line
+	// select a game passed through the command line or configuration
 	if (Opt.GameOverride != GAME_UNKNOWN)
 	{
 		OverrideEngineCombo->SelectItem(GetEngineName(Opt.GameOverride));
-		FillGameList();
 	}
+	else
+	{
+		OverrideEngineCombo->SelectItem("Unreal engine 4");
+	}
+	FillGameList();
 
 	static const int DefaultIndent = 20;
 
@@ -216,6 +224,8 @@ void UIStartupDialog::FillGameList()
 		QSort<const GameInfo*>(&SelectedGameInfos[numEngineEntries], SelectedGameInfos.Num() - numEngineEntries, CompareGames);
 	}
 
+	int selectIndex = 0;
+	int itemIndex = 0;
 	for (i = 0; i < SelectedGameInfos.Num(); i++)
 	{
 #if UNREAL4
@@ -227,15 +237,21 @@ void UIStartupDialog::FillGameList()
 				char buf[128];
 				appSprintf(ARRAY_ARG(buf), "Unreal engine 4.%d", ue4ver);
 				OverrideGameCombo->AddItem(buf, GAME_UE4(ue4ver));
+				if (GAME_UE4(ue4ver) == Opt.GameOverride)
+					selectIndex = itemIndex;
+				itemIndex++;
 			}
 			continue;
 		}
 #endif // UNREAL4
 		OverrideGameCombo->AddItem(SelectedGameInfos[i]->Name, SelectedGameInfos[i]->Enum);
+		if (SelectedGameInfos[i]->Enum == Opt.GameOverride)
+			selectIndex = itemIndex;
+		itemIndex++;
 	}
 
 	// select engine item
-	OverrideGameCombo->SelectItem(0);
+	OverrideGameCombo->SelectItem(selectIndex);
 
 	unguard;
 }

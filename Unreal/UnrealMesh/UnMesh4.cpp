@@ -6,6 +6,7 @@
 #include "UE4Version.h"
 
 #include "UnObject.h"
+#include "UnrealPackage/UnPackage.h"
 #include "UnMesh4.h"
 #include "UnMesh3.h"				// for FSkeletalMeshLODInfo
 #include "UnMeshTypes.h"
@@ -840,39 +841,25 @@ struct FSkelMeshSection4
 			Ar << RecomputeTangentsVertexMaskChannel;
 		}
 
+#if WUTHERING_WAVES
+		if (Ar.Game == GAME_WutheringWaves)
+		{
+			const UnPackage* Pkg = Ar.CastTo<UnPackage>();
+			if (!Pkg && UObject::GLoadingObj) Pkg = UObject::GLoadingObj->Package;
+			if (Pkg && Pkg->ContainsName("KuroRuntimeLODBias_PackedData2"))
+			{
+				int32 WuWaExtra;
+				Ar << WuWaExtra;
+			}
+		}
+#endif
+
 		Ar << S.bCastShadow;
 		Ar << S.BaseVertexIndex;
 
 		TArray<FApexClothPhysToRenderVertData> ClothMappingData;
-#if WUTHERING_WAVES
-		if (Ar.Game == GAME_WutheringWaves)
-		{
-			// Safe reading of ClothMappingData count for Wuthering Waves
-			int ClothCount = 0;
-			Ar << ClothCount;
-
-			if (ClothCount > 0 && ClothCount < 65536)
-			{
-				ClothMappingData.Empty(ClothCount);
-				for (int i = 0; i < ClothCount; i++)
-				{
-					FApexClothPhysToRenderVertData D;
-					Ar << D;
-					ClothMappingData.Add(D);
-				}
-			}
-			else if (ClothCount < 0)
-			{
-				appPrintf("WARNING: wuwa invalid ClothMappingData count %d\n", ClothCount);
-			}
-			S.HasClothData = (ClothMappingData.Num() > 0);
-		}
-		else
-#endif // WUTHERING_WAVES
-		{
-			Ar << ClothMappingData;
-			S.HasClothData = (ClothMappingData.Num() > 0);
-		}
+		Ar << ClothMappingData;
+		S.HasClothData = (ClothMappingData.Num() > 0);
 
 		Ar << S.BoneMap;
 		Ar << S.NumVertices;
@@ -887,17 +874,6 @@ struct FSkelMeshSection4
 #if PARAGON
 		if (Ar.Game == GAME_Paragon) return;
 #endif
-
-#if WUTHERING_WAVES
-		if (Ar.Game == GAME_WutheringWaves)
-		{
-			// In Wuthering Waves cooked shipping packages, DuplicatedVerticesBuffer is not serialized.
-			// However, ClassStripFlags may have bit 1 cleared on certain character models (e.g. Fuludelisi),
-			// which would cause standard UE4 deserializer to mistakenly attempt reading DuplicatedVerticesBuffer.
-			Ar << S.bDisabled;
-			return;
-		}
-#endif // WUTHERING_WAVES
 
 		if (Ar.Game < GAME_UE4(23) || !StripFlags.IsClassDataStripped(1)) // DuplicatedVertices, introduced in UE4.23
 		{

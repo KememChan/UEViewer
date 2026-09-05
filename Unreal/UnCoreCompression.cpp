@@ -216,10 +216,30 @@ static void appDecompressOodle(byte *CompressedBuffer, int CompressedSize, byte 
 #if USE_OODLE && _WIN32 && !HAS_OODLE
 
 #ifdef _WIN64
-static const char* OodleDllName = "oo2core_5_win64.dll";
+static const char* OodleDllNames[] =
+{
+	"oo2core_9_win64.dll",
+	"oo2core_8_win64.dll",
+	"oo2core_7_win64.dll",
+	"oo2core_6_win64.dll",
+	"oo2core_5_win64.dll",
+	"oo2core_4_win64.dll",
+	"oo2core_3_win64.dll",
+	"oo2core_win64.dll",
+};
 static const char* OodleFuncName = "OodleLZ_Decompress";
 #else
-static const char* OodleDllName = "oo2core_5_win32.dll";
+static const char* OodleDllNames[] =
+{
+	"oo2core_9_win32.dll",
+	"oo2core_8_win32.dll",
+	"oo2core_7_win32.dll",
+	"oo2core_6_win32.dll",
+	"oo2core_5_win32.dll",
+	"oo2core_4_win32.dll",
+	"oo2core_3_win32.dll",
+	"oo2core_win32.dll",
+};
 static const char* OodleFuncName = "_OodleLZ_Decompress@56";
 #endif
 
@@ -244,24 +264,24 @@ static void appDecompressOodle_DLL(byte *CompressedBuffer, int CompressedSize, b
 	if (!bOodleLoaded)
 	{
 		// Find the dll
-		// Try loading from default path(s) first
-		hOodleDll = LoadLibrary(OodleDllName);
-
-		if (!hOodleDll)
+		static const char* SearchPaths[] =
 		{
-			static const char* SearchPaths[] =
-			{
-				".", ".\\libs"
-			};
+			".", ".\\libs"
+		};
+		for (const char* DllName : OodleDllNames)
+		{
+			hOodleDll = LoadLibrary(DllName);
+			if (hOodleDll) break;
 			for (const char* Path : SearchPaths)
 			{
-				hOodleDll = LoadLibrary(va("%s\\%s", Path, OodleDllName));
+				hOodleDll = LoadLibrary(va("%s\\%s", Path, DllName));
 				if (hOodleDll) break;
 			}
+			if (hOodleDll) break;
 		}
 
 		if (!hOodleDll)
-			appErrorNoLog("Internal Oodle decompressor failed, %s not found", OodleDllName);
+			appErrorNoLog("Internal Oodle decompressor failed, oo2core_*.dll not found. Please place oo2core_9_win64.dll (or oo2core_5..8) in the umodel folder.");
 
 		OodleLZ_Decompress = (OodleDecompress_t)GetProcAddress(hOodleDll, OodleFuncName);
 		assert(OodleLZ_Decompress != NULL);

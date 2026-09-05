@@ -126,7 +126,7 @@ void CExportSettings::Reset()
 	ExportDdsTexture = false;
 	SkeletalMeshFormat = EExportMeshFormat::psk;
 	StaticMeshFormat = EExportMeshFormat::psk;
-	TextureFormat = ETextureExportFormat::tga;
+	TextureFormat = ETextureExportFormat::png;
 	ExportMeshLods = false;
 	SaveUncooked = false;
 	SaveGroups = false;
@@ -177,21 +177,53 @@ static void RegisterClasses()
 	}
 }
 
+#if _WIN32
+extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void* hModule, char* lpFilename, unsigned long nSize);
+#endif
+
+static FString GetConfigFilePath()
+{
+#if _WIN32
+	char exePath[512];
+	if (GetModuleFileNameA(NULL, exePath, sizeof(exePath)))
+	{
+		char* s = strrchr(exePath, '\\');
+		if (!s) s = strrchr(exePath, '/');
+		if (s)
+		{
+			*s = '\0';
+			char cfgPath[512];
+			appSprintf(ARRAY_ARG(cfgPath), "%s/%s", exePath, CONFIG_FILE);
+			appNormalizeFilename(cfgPath);
+			return FString(cfgPath);
+		}
+	}
+#endif
+	FString ConfigFile;
+	SetPathOption(ConfigFile, CONFIG_FILE);
+	return ConfigFile;
+}
+
 void CUmodelSettings::Save()
 {
 	guard(CUmodelSettings::Save);
 
 	RegisterClasses();
 
-	FString ConfigFile;
-	SetPathOption(ConfigFile, CONFIG_FILE);
+	FString ConfigFile = GetConfigFilePath();
 
 	FArchive* Ar = new FFileWriter(*ConfigFile, EFileArchiveOptions::TextFile | EFileArchiveOptions::NoOpenError);
 	if (!Ar->IsOpen())
 	{
 		delete Ar;
-		appPrintf("Error creating file \"%s\" ...\n", *ConfigFile);
-		return;
+		SetPathOption(ConfigFile, CONFIG_FILE);
+		Ar = new FFileWriter(*ConfigFile, EFileArchiveOptions::TextFile | EFileArchiveOptions::NoOpenError);
+		if (!Ar->IsOpen())
+		{
+			delete Ar;
+			appPrintf("Error creating file \"%s\" ...\n", *ConfigFile);
+			return;
+		}
 	}
 
 	const CTypeInfo* TypeInfo = CUmodelSettings::StaticGetTypeinfo();
@@ -208,14 +240,25 @@ void CUmodelSettings::Load()
 
 	RegisterClasses();
 
-	FString ConfigFile;
-	SetPathOption(ConfigFile, CONFIG_FILE);
+	FString ConfigFile = GetConfigFilePath();
 
 	FArchive* Ar = new FFileReader(*ConfigFile, EFileArchiveOptions::NoOpenError); // can't use TextFile because of FFileReader::IsEof will not work fine with it
 	if (!Ar->IsOpen())
 	{
 		delete Ar;
-		return;
+		Ar = NULL;
+		FString FallbackConfigFile;
+		SetPathOption(FallbackConfigFile, CONFIG_FILE);
+		if (FallbackConfigFile != ConfigFile)
+		{
+			Ar = new FFileReader(*FallbackConfigFile, EFileArchiveOptions::NoOpenError);
+		}
+		if (!Ar || !Ar->IsOpen())
+		{
+			if (Ar) delete Ar;
+			return;
+		}
+		ConfigFile = FallbackConfigFile;
 	}
 
 	const CTypeInfo* TypeInfo = CUmodelSettings::StaticGetTypeinfo();

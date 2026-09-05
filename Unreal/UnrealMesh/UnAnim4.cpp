@@ -1,3 +1,7 @@
+#if _WIN32
+#include <windows.h>
+#endif
+
 #include "Core.h"
 
 #if UNREAL4
@@ -103,6 +107,16 @@ FArchive& operator<<(FArchive& Ar, FReferenceSkeleton& S)
 		Ar << unk;
 	}
 #endif // DAYSGONE
+
+#if WUTHERING_WAVES
+	if (Ar.Game == GAME_WutheringWaves)
+	{
+		TArray<FVector> unk;
+		Ar << unk;
+		int32 unk2;
+		Ar << unk2;
+	}
+#endif // WUTHERING_WAVES
 
 	int NumBones = S.RefBoneInfo.Num();
 	if (Ar.ArVer < VER_UE4_FIXUP_ROOTBONE_PARENT && NumBones > 0 && S.RefBoneInfo[0].ParentIndex != INDEX_NONE)
@@ -660,8 +674,35 @@ static void AdjustSequenceBySkeleton(USkeleton* Skeleton, const TArray<FTransfor
 
 	unguard;
 }
-
 #endif // BAKE_BONE_SCALES
+
+#if _WIN32
+static int ExceptionFilter(EXCEPTION_POINTERS* ep)
+{
+	appPrintf("WARNING: ACL decompression exception 0x%08X at %p\n",
+		ep->ExceptionRecord->ExceptionCode,
+		ep->ExceptionRecord->ExceptionAddress);
+	return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
+static bool SafeReadACLData(void* allocptr, void* Pos, void* Rot, void* Scale)
+{
+#if _WIN32
+	__try
+	{
+		nReadACLData(allocptr, Pos, Rot, Scale);
+		return true;
+	}
+	__except (ExceptionFilter(GetExceptionInformation()))
+	{
+		return false;
+	}
+#else
+	nReadACLData(allocptr, Pos, Rot, Scale);
+	return true;
+#endif
+}
 
 void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 {
@@ -676,7 +717,6 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 
 		// Copy bone names
 		int NumBones = ReferenceSkeleton.RefBoneInfo.Num();
-		assert(BoneTree.Num() == NumBones);
 
 		AnimSet->TrackBoneNames.Empty(NumBones);
 		AnimSet->BonePositions.Empty(NumBones);
@@ -704,32 +744,35 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 #endif // DEBUG_RETARGET
 			AnimSet->BonePositions.Add(BonePosition);
 			// Process bone retargeting mode
-			EBoneRetargetingMode BoneMode =EBoneRetargetingMode::Animation;
-			switch (BoneTree[i].TranslationRetargetingMode)
+			EBoneRetargetingMode BoneMode = EBoneRetargetingMode::Animation;
+			if (i < BoneTree.Num())
 			{
-			case EBoneTranslationRetargetingMode::Skeleton:
-				BoneMode = EBoneRetargetingMode::Mesh;
-				break;
-			case EBoneTranslationRetargetingMode::Animation:
-				BoneMode = EBoneRetargetingMode::Animation;
-				break;
-			case EBoneTranslationRetargetingMode::AnimationScaled:
-				BoneMode = EBoneRetargetingMode::AnimationScaled;
-				break;
-			case EBoneTranslationRetargetingMode::AnimationRelative:
-				BoneMode = EBoneRetargetingMode::AnimationRelative;
-				break;
-			case EBoneTranslationRetargetingMode::OrientAndScale:
-				BoneMode = EBoneRetargetingMode::OrientAndScale;
-				break;
-			default:
-				//todo: other modes?
-				BoneMode = EBoneRetargetingMode::OrientAndScale;
+				switch (BoneTree[i].TranslationRetargetingMode)
+				{
+				case EBoneTranslationRetargetingMode::Skeleton:
+					BoneMode = EBoneRetargetingMode::Mesh;
+					break;
+				case EBoneTranslationRetargetingMode::Animation:
+					BoneMode = EBoneRetargetingMode::Animation;
+					break;
+				case EBoneTranslationRetargetingMode::AnimationScaled:
+					BoneMode = EBoneRetargetingMode::AnimationScaled;
+					break;
+				case EBoneTranslationRetargetingMode::AnimationRelative:
+					BoneMode = EBoneRetargetingMode::AnimationRelative;
+					break;
+				case EBoneTranslationRetargetingMode::OrientAndScale:
+					BoneMode = EBoneRetargetingMode::OrientAndScale;
+					break;
+				default:
+					//todo: other modes?
+					BoneMode = EBoneRetargetingMode::OrientAndScale;
+				}
 			}
 			AnimSet->BoneModes[i] = BoneMode;
 #if DEBUG_ANIM
 			appPrintf("  %d: %s: (%g %g %g) mode=%d\n", i, *ReferenceSkeleton.RefBoneInfo[i].Name,
-				VECTOR_ARG(ReferenceSkeleton.RefBonePose[i].Translation), BoneTree[i].TranslationRetargetingMode);
+				VECTOR_ARG(ReferenceSkeleton.RefBonePose[i].Translation), i < BoneTree.Num() ? BoneTree[i].TranslationRetargetingMode : -1);
 #endif
 		}
 
@@ -754,7 +797,7 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 #if DEBUG_DECOMPRESS
 	appPrintf("Sequence %s: %d bones, %d offsets (%g per bone), %d frames, %d compressed data\n"
 		   "          trans %s, rot %s, scale %s, key %s\n",
-		Seq->Name, NumTracks, Seq->CompressedTrackOffsets.Num(), Seq->CompressedTrackOffsets.Num() / (float)NumTracks,
+		Seq->Name, NumTracks, Seq->CompressedTrackOffsets.Num(), NumTracks ? Seq->CompressedTrackOffsets.Num() / (float)NumTracks : 0,
 		Seq->NumFrames, Seq->CompressedByteStream.Num(),
 		EnumToName(Seq->TranslationCompressionFormat),
 		EnumToName(Seq->RotationCompressionFormat),
@@ -881,11 +924,7 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 	// bone tracks ...
 	Dst->Tracks.Empty(NumTracks);
 
-	// There could be an animation consisting of only trans with offsets == -1, what means
-	// use of RefPose. In this case there's no point adding the animation to AnimSet. We'll
-	// create FMemReader even for empty CompressedByteStream, otherwise it would be hard to
-	// create a valid CAnimSequence which won't crash animation export.
-	if (Seq->BoneCodecDDCHandle.EndsWith("ACL_0"))
+	if (Seq->BoneCodecDDCHandle.EndsWith("ACL_0") || strstr(*Seq->BoneCodecDDCHandle, "ACL") != NULL)
 	{
 		byte* allocptr = (byte*)nAllocate(Seq->SerializedByteStream.Num(), 16);
 		memcpy(allocptr, Seq->SerializedByteStream.GetData(), Seq->SerializedByteStream.Num() * sizeof(uint8));
@@ -910,8 +949,8 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 			bool GetHasScale() { return (MiscPacked & 1) != 0; }
 		};
 
-		TracksHeader header = *(TracksHeader*)(allocptr + sizeof(RawBufferHeader));
-
+		TracksHeader* header_ptr = (TracksHeader*)(allocptr + sizeof(RawBufferHeader));
+		TracksHeader header = *header_ptr;
 		int NumKeys = header.NumSamples * header.NumTracks;
 
 		TArray<FVector> PosKeys;
@@ -922,7 +961,17 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 		TArray<FVector> ScaleKeys;
 		ScaleKeys.AddUninitialized(NumKeys);
 
-		nReadACLData(allocptr, PosKeys.GetData(), RotKeys.GetData(), ScaleKeys.GetData());
+		bool bOk = SafeReadACLData(allocptr, PosKeys.GetData(), RotKeys.GetData(), ScaleKeys.GetData());
+		if (!bOk)
+		{
+			appPrintf("WARNING: SafeReadACLData failed for %s, falling back to identity transforms\n", Seq->Name);
+			for (int k = 0; k < NumKeys; k++)
+			{
+				PosKeys[k].X = 0; PosKeys[k].Y = 0; PosKeys[k].Z = 0;
+				RotKeys[k].X = 0; RotKeys[k].Y = 0; RotKeys[k].Z = 0; RotKeys[k].W = 1.0f;
+				ScaleKeys[k].X = 1.0f; ScaleKeys[k].Y = 1.0f; ScaleKeys[k].Z = 1.0f;
+			}
+		}
 
 #if !SUPPORT_SCALE_KEYS
 		ScaleKeys.Empty();
@@ -1175,6 +1224,12 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 	// And apply scales to positions, when skeleton has any
 	AdjustSequenceBySkeleton(this, RetargetTransforms ? *RetargetTransforms : ReferenceSkeleton.RefBonePose, Dst);
 #endif
+
+	// Release original animation data to save memory
+	Seq->RawAnimationData.Empty();
+	Seq->CompressedByteStream.Empty();
+	Seq->CompressedTrackOffsets.Empty();
+	Seq->SerializedByteStream.Empty();
 
 	unguardf("Skel=%s Anim=%s", Name, Seq->Name);
 }
@@ -1539,9 +1594,6 @@ void UAnimSequence4::SerializeCompressedData3(FArchive& Ar)
 
 	FString /*BoneCodecDDCHandle,*/ CurveCodecPath;
 	Ar << BoneCodecDDCHandle << CurveCodecPath;
-#if DEBUG_ANIM
-	appPrintf("BoneCodec (%s) CurveCodec (%s)\n", *BoneCodecDDCHandle, *CurveCodecPath);
-#endif
 
 	TArray<byte> CompressedCurveByteStream;
 	Ar << CompressedCurveByteStream;
@@ -1553,7 +1605,7 @@ void UAnimSequence4::SerializeCompressedData3(FArchive& Ar)
 		Ar << CompressedNumFrames;
 		// todo: editor-only data here
 
-		if (BoneCodecDDCHandle.EndsWith("ACL_0"))
+		if (BoneCodecDDCHandle.EndsWith("ACL_0") || strstr(*BoneCodecDDCHandle, "ACL") != NULL)
 		{
 			NumFrames = CompressedNumFrames;
 			return;

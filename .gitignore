@@ -51,3 +51,14 @@ Tools/PackageExtract/oo2core*.dll
 
 # PackageExtract - ignore all extracted stuff
 Tools/PackageExtract/**/
+
+# Distribution output
+dist/
+dist_64/
+
+# Local game keys and libraries
+oo2core*.dll
+keys.json
+libs/acl/source/
+qingxiao_files.txt
+

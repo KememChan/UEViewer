@@ -611,11 +611,27 @@ UnPackage::~UnPackage()
 	}
 
 	// free tables
-	delete[] NameTable;
-	delete[] ImportTable;
-	delete[] ExportTable;
+	if (NameTable)
+	{
+		delete[] NameTable;
+		NameTable = NULL;
+	}
+	if (ImportTable)
+	{
+		delete[] ImportTable;
+		ImportTable = NULL;
+	}
+	if (ExportTable)
+	{
+		delete[] ExportTable;
+		ExportTable = NULL;
+	}
 #if UNREAL4
-	delete[] ExportIndices_IOS;
+	if (ExportIndices_IOS)
+	{
+		delete[] ExportIndices_IOS;
+		ExportIndices_IOS = NULL;
+	}
 #endif
 
 	unguard;

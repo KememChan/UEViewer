@@ -407,6 +407,21 @@ struct FTexture2DMipMap
 	int32			SizeX;
 	int32			SizeY;
 
+#if WUTHERING_WAVES
+	int32			bIsOodle;
+	uint32			OodleFlags;
+	int32			OodleModes[10];
+
+	FTexture2DMipMap()
+	:	SizeX(0)
+	,	SizeY(0)
+	,	bIsOodle(0)
+	,	OodleFlags(0)
+	{
+		memset(OodleModes, 0, sizeof(OodleModes));
+	}
+#endif
+
 #if UNREAL3
 	static void Serialize3(FArchive& Ar, FTexture2DMipMap& Mip);
 #endif

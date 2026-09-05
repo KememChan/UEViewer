@@ -267,6 +267,19 @@ public:
 	// Check if valid package has been created by constructor
 	bool IsValid() const { return Summary.NameCount > 0; }
 
+	bool ContainsName(const char* name, bool bIgnoreCase = false) const
+	{
+		for (int i = 0; i < Summary.NameCount; i++)
+		{
+			if (NameTable[i])
+			{
+				if (bIgnoreCase ? (!stricmp(NameTable[i], name)) : (!strcmp(NameTable[i], name)))
+					return true;
+			}
+		}
+		return false;
+	}
+
 	// Load package using short name (without path and extension) or full path name.
 	// When the package is already loaded, this function will simply return a pointer
 	// to previously loaded UnPackage.

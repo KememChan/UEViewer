@@ -285,7 +285,7 @@ void* appRealloc(void* ptr, int newSize)
 void appFree(void* ptr)
 {
 	guard(appFree);
-	assert(ptr);
+	if (!ptr) return;
 
 	CBlockHeader* hdr = (CBlockHeader*)ptr - 1;
 	assert(hdr->magic == BLOCK_MAGIC);
@@ -488,12 +488,12 @@ void* operator new[](size_t size)
 
 void operator delete(void* ptr)
 {
-	appFree(ptr);
+	if (ptr) appFree(ptr);
 }
 
 void operator delete[](void* ptr)
 {
-	appFree(ptr);
+	if (ptr) appFree(ptr);
 }
 
 #endif // __APPLE__

@@ -604,9 +604,21 @@ public:
 	{
 		return *Items[index].Text;
 	}
+	FORCEINLINE int GetItemValue(int index) const
+	{
+		return (index >= 0 && index < Items.Num()) ? Items[index].Value : -1;
+	}
+	FORCEINLINE int GetItemCount() const
+	{
+		return Items.Num();
+	}
 	FORCEINLINE int GetSelectionIndex() const
 	{
 		return Selection;
+	}
+	FORCEINLINE int GetSelectionValue() const
+	{
+		return (Selection >= 0 && Selection < Items.Num()) ? Items[Selection].Value : -1;
 	}
 	FORCEINLINE const char* GetSelectionText() const
 	{

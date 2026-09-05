@@ -1170,8 +1170,11 @@ void UICombobox::RemoveAllItems()
 
 UICombobox& UICombobox::SelectItem(int index)
 {
-	if (Selection == index) return *this;
 	Selection = index;
+	if (pValue && index >= 0 && index < Items.Num())
+	{
+		*pValue = Items[index].Value;
+	}
 	if (Wnd) SendMessage(Wnd, CB_SETCURSEL, Selection, 0);
 	return *this;
 }

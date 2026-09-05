@@ -2450,6 +2450,8 @@ void UMaterialInstanceConstant::GetParams(CMaterialParams &Params) const
 		DIFFUSE (strstr(Name, "dif"), 100);
 		DIFFUSE (strstr(Name, "albedo"), 100);
 		DIFFUSE (strstr(Name, "color"), 80);
+		DIFFUSE (!strcmp(Name, "maintex"), 100);		// Kuro Games (Wuthering Waves)
+		DIFFUSE (strstr(Name, "basemap"), 90);
 		NORMAL  (strstr(Name, "norm") && !strstr(Name, "fx"), 100);
 		SPECPOW (strstr(Name, "specpow"), 100);
 		SPECULAR(strstr(Name, "spec"), 100);
