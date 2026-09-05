@@ -62,13 +62,24 @@ public:
 	virtual UIMenuItem* GetObjectMenu(UIMenuItem* menu);
 #endif
 
+	virtual void PreDraw3D(float TimeDelta)
+	{}
 	virtual void Draw3D(float TimeDelta)
 	{}
+	virtual CVec3 GetObjectOrigin() const
+	{
+		return nullVec3;
+	}
 
 	void JumpTo(const UObject* Object)
 	{
 		JumpAfterFrame = Object;
 	}
+
+	virtual class CSkelMeshViewer* AsSkelMeshViewer() { return NULL; }
+	virtual class CMeshViewer* AsMeshViewer() { return NULL; }
+	virtual class CStatMeshViewer* AsStatMeshViewer() { return NULL; }
+	virtual class CMaterialViewer* AsMaterialViewer() { return NULL; }
 };
 
 
@@ -92,6 +103,8 @@ public:
 
 	virtual void Draw2D() override;
 	virtual void Draw3D(float TimeDelta) override;
+	UUnrealMaterial* GetMaterial() const { return NonConstMaterial; }
+	virtual CMaterialViewer* AsMaterialViewer() override { return this; }
 
 protected:
 	void FlushProps();
@@ -130,8 +143,11 @@ public:
 #endif
 
 	virtual void Draw3D(float TimeDelta) override;
+	virtual CVec3 GetObjectOrigin() const override;
 
 	virtual void DrawMesh(CMeshInstance *Inst);
+	CMeshInstance* GetMeshInst() const { return Inst; }
+	virtual CMeshViewer* AsMeshViewer() override { return this; }
 
 	// Print a text about mesh material. Automatically highlights material if mouse points
 	// at its text record on screen.
@@ -160,6 +176,7 @@ public:
 	virtual void Test() override;
 #endif
 	virtual void Draw2D() override;
+	virtual void PreDraw3D(float TimeDelta) override;
 	virtual void Draw3D(float TimeDelta) override;
 };
 
@@ -193,6 +210,7 @@ public:
 	virtual void Dump() override;
 	virtual void Export() override;
 	virtual void Draw2D() override;
+	virtual void PreDraw3D(float TimeDelta) override;
 	virtual void Draw3D(float TimeDelta) override;
 	virtual void ProcessKey(unsigned key) override;
 	virtual void ProcessKeyUp(unsigned key) override;
@@ -205,6 +223,21 @@ public:
 	virtual void DrawMesh(CMeshInstance *Inst) override;
 
 	static TArray<CSkelMeshInstance*> TaggedMeshes;	// for displaying multipart meshes
+
+	// Helpers for UI
+	CSkeletalMesh* GetMesh() const { return Mesh; }
+	const CAnimSet* GetActiveAnimSet() const { return Anim; }
+	USkeleton* GetSkeleton() const { return Skeleton; }
+	CSkelMeshInstance* GetSkelInst() const { return (CSkelMeshInstance*)Inst; }
+	void SelectAnim(int index);
+	void PlayCurrentAnim(bool bLoop = false, float speed = 1.0f);
+	void PauseCurrentAnim();
+	void TogglePlayPause(bool bLoop = false, float speed = 1.0f);
+	bool IsAnimPlaying() const;
+	void SetAnimFrame(float Frame);
+	void SetAnimSpeed(float speed);
+	void ExportAnimation(int index);
+	virtual CSkelMeshViewer* AsSkelMeshViewer() override { return this; }
 
 private:
 	CSkeletalMesh*	Mesh;
@@ -234,6 +267,9 @@ public:
 	virtual void Dump() override;
 	virtual void Draw2D() override;
 	virtual void ProcessKey(unsigned key) override;
+
+	CStaticMesh* GetStaticMesh() const { return Mesh; }
+	virtual CStatMeshViewer* AsStatMeshViewer() override { return this; }
 
 private:
 	CStaticMesh		*Mesh;

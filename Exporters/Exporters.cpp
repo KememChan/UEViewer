@@ -5,6 +5,7 @@
 #include "UnrealPackage/UnPackage.h"	// for Package->Name
 
 #include "Exporters.h"
+#include "Mesh/SkeletalMesh.h"
 
 #include "Parallel.h"
 
@@ -592,5 +593,29 @@ FArchive* CreateExportArchive(const UObject* Obj, EFileArchiveOptions FileOption
 
 	return Ar;
 
+	unguard;
+}
+
+
+static SingleAnimExporterFunc_t GSingleAnimExporter = NULL;
+
+void RegisterSingleAnimExporter(SingleAnimExporterFunc_t Func)
+{
+	GSingleAnimExporter = Func;
+}
+
+bool ExportSingleAnimation(const CAnimSet* Anim, int SeqIndex)
+{
+	guard(ExportSingleAnimation);
+	if (!Anim || SeqIndex < 0 || SeqIndex >= Anim->Sequences.Num()) return false;
+
+	if (GSingleAnimExporter)
+	{
+		GSingleAnimExporter(Anim, SeqIndex);
+		return true;
+	}
+
+	ExportSinglePsa(Anim, SeqIndex);
+	return true;
 	unguard;
 }

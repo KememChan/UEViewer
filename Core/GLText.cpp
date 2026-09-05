@@ -17,7 +17,7 @@
 #define TEXT_SCROLL_LINES		((CHAR_HEIGHT-FONT_SPACING)/2)
 //#define SHOW_FONT_TEX			1		// show font texture
 
-bool GShowDebugInfo = true;
+bool GShowDebugInfo = false;
 
 static GLuint FontTexNum = 0;
 

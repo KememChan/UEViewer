@@ -493,8 +493,13 @@ void CSkelMeshInstance::UpdateSkeleton()
 			}
 
 			const CSkelMeshBone &Bone = pMesh->RefSkeleton[i];
-			CVec3 NewBonePosition = Bone.Position;				// default position - from mesh bind pose
-			CQuat NewBoneRotation = Bone.Orientation;			// ...
+			CVec3 BasePosition = (Stage == 0) ? Bone.Position : data->Pos;
+			CQuat BaseRotation = (Stage == 0) ? Bone.Orientation : data->Quat;
+			if (Stage > 0 && !i)
+				BaseRotation.Conjugate();
+
+			CVec3 NewBonePosition = BasePosition;				// default position
+			CQuat NewBoneRotation = BaseRotation;				// ...
 
 			int AnimBoneIndex = data->AnimBoneIndex;
 
@@ -513,8 +518,33 @@ void CSkelMeshInstance::UpdateSkeleton()
 				// get bone position from track
 				if (!AnimSeq2 || Chn->SecondaryBlend != 1.0f)
 				{
-					AnimSeq1->Tracks[AnimBoneIndex]->GetBonePosition(
-						Chn->CurrentFrame, AnimSeq1->NumFrames, Chn->bLooped, NewBonePosition, NewBoneRotation);
+					if (AnimSeq1->bAdditive)
+					{
+						CVec3 DeltaPos; DeltaPos.Set(0, 0, 0);
+						CQuat DeltaRot; DeltaRot.Set(0, 0, 0, 1);
+						AnimSeq1->Tracks[AnimBoneIndex]->GetBonePosition(
+							Chn->CurrentFrame, AnimSeq1->NumFrames, Chn->bLooped, DeltaPos, DeltaRot);
+
+						NewBonePosition = BasePosition;
+						NewBonePosition.Add(DeltaPos);
+
+						if (AnimSeq1->AdditiveType == 2 /* AAT_RotationOffsetMeshSpace */)
+						{
+							NewBoneRotation = DeltaRot;
+							NewBoneRotation.Mul(BaseRotation);
+						}
+						else
+						{
+							NewBoneRotation = BaseRotation;
+							NewBoneRotation.Mul(DeltaRot);
+						}
+						NewBoneRotation.Normalize();
+					}
+					else
+					{
+						AnimSeq1->Tracks[AnimBoneIndex]->GetBonePosition(
+							Chn->CurrentFrame, AnimSeq1->NumFrames, Chn->bLooped, NewBonePosition, NewBoneRotation);
+					}
 #if SHOW_ANIM
 					BoneDebug.bIsAnimated = true;
 					BoneDebug.AnimPosition = NewBonePosition;
@@ -528,10 +558,37 @@ void CSkelMeshInstance::UpdateSkeleton()
 				// Blend with the second animation at the same animation channel
 				if (AnimSeq2)
 				{
-					CVec3 AnimBonePositionBlend = Bone.Position;	// default position - from bind pose
-					CQuat AnimBoneRotationBlend = Bone.Orientation; // ...
-					AnimSeq2->Tracks[AnimBoneIndex]->GetBonePosition(
-						Frame2, AnimSeq2->NumFrames, Chn->bLooped, AnimBonePositionBlend, AnimBoneRotationBlend);
+					CVec3 AnimBonePositionBlend;
+					CQuat AnimBoneRotationBlend;
+					if (AnimSeq2->bAdditive)
+					{
+						CVec3 DeltaPos2; DeltaPos2.Set(0, 0, 0);
+						CQuat DeltaRot2; DeltaRot2.Set(0, 0, 0, 1);
+						AnimSeq2->Tracks[AnimBoneIndex]->GetBonePosition(
+							Frame2, AnimSeq2->NumFrames, Chn->bLooped, DeltaPos2, DeltaRot2);
+
+						AnimBonePositionBlend = BasePosition;
+						AnimBonePositionBlend.Add(DeltaPos2);
+
+						if (AnimSeq2->AdditiveType == 2 /* AAT_RotationOffsetMeshSpace */)
+						{
+							AnimBoneRotationBlend = DeltaRot2;
+							AnimBoneRotationBlend.Mul(BaseRotation);
+						}
+						else
+						{
+							AnimBoneRotationBlend = BaseRotation;
+							AnimBoneRotationBlend.Mul(DeltaRot2);
+						}
+						AnimBoneRotationBlend.Normalize();
+					}
+					else
+					{
+						AnimBonePositionBlend = Bone.Position;	// default position - from bind pose
+						AnimBoneRotationBlend = Bone.Orientation; // ...
+						AnimSeq2->Tracks[AnimBoneIndex]->GetBonePosition(
+							Frame2, AnimSeq2->NumFrames, Chn->bLooped, AnimBonePositionBlend, AnimBoneRotationBlend);
+					}
 					if (Chn->SecondaryBlend == 1.0f)
 					{
 						// Fully override the animation
@@ -549,7 +606,9 @@ void CSkelMeshInstance::UpdateSkeleton()
 #endif
 				}
 				// Process bone translation mode (animation retargeting).
-				// Current state:
+				// Skip retargeting length scaling for additive animations, as deltas are relative offsets.
+				if (!AnimSeq1->bAdditive)
+				{
 				EBoneRetargetingMode RetargetingMode = Animation->GetBoneTranslationMode(AnimBoneIndex, (EAnimRetargetingMode)RetargetingModeOverride);
 #if SHOW_ANIM
 				BoneDebug.RetargetMode = RetargetingMode;
@@ -639,6 +698,7 @@ void CSkelMeshInstance::UpdateSkeleton()
 						}
 					}
 					break;
+				}
 				}
 #if SHOW_ANIM
 				// Store the updated positions
@@ -899,9 +959,16 @@ void CSkelMeshInstance::PlayAnimInternal(const char *AnimName, float Rate, float
 	else
 		Chn.bReverse = NewAnim->Rate < 0.0f;
 
-	if (NewAnim == Chn.Anim1 && Looped)
+	if (NewAnim == Chn.Anim1)
 	{
-		// animation not changed, just set some flags (above)
+		// Animation not changed; if resuming from pause, continue from current frame
+		if (!Looped)
+		{
+			if (!Chn.bReverse && Chn.CurrentFrame >= NewAnim->NumFrames - 1)
+				Chn.CurrentFrame = 0;
+			else if (Chn.bReverse && Chn.CurrentFrame <= 0.0f)
+				Chn.CurrentFrame = max(NewAnim->NumFrames - 1, 0);
+		}
 		return;
 	}
 

@@ -10,6 +10,9 @@
 	Application class
 -----------------------------------------------------------------------------*/
 
+union SDL_Event;
+struct SDL_Window;
+
 //!! - move most 'static' code to this class
 //!! - rename to CWindow (but this class has VisualizerLoop - this is global function)
 class CApplication
@@ -29,12 +32,28 @@ public:
 
 	virtual void WindowCreated()
 	{}
+	virtual void OnInitGL()
+	{}
+	virtual void OnShutdownGL()
+	{}
+	virtual bool FilterEvent(const SDL_Event* evt)
+	{
+		return false;
+	}
+	virtual void PreDraw3D(float TimeDelta)
+	{}
 	virtual void Draw3D(float TimeDelta)
 	{}
 	virtual void DrawTexts();
+	virtual void PostRender2D()
+	{}
 	virtual void BeforeSwap()
 	{}
 	virtual void ProcessKey(unsigned key, bool isDown);
+	virtual CVec3 GetTrackedObjectOrigin() const
+	{
+		return nullVec3;
+	}
 #if _WIN32
 	// Win32 message hook
 	virtual void WndProc(UINT msg, WPARAM wParam, LPARAM lParam)
@@ -59,11 +78,41 @@ void FocusCameraOnPoint(const CVec3 &center);
 void SetDistScale(float scale);
 void SetViewOffset(const CVec3 &offset);
 void ResetView();
+float GetCameraFOV();
+void SetCameraFOV(float fov);
+float GetCameraDistance();
+void SetCameraDistance(float dist);
+
+// camera modes and controls
+enum
+{
+	CAMERA_MODE_FREE = 0,        // Default free camera (fixed pivot)
+	CAMERA_MODE_ORBIT_OBJECT,    // Blender-like orbit & track object origin
+	CAMERA_MODE_COUNT
+};
+
+extern int  GCameraMode;
+void SetCameraMode(int newMode);
 
 // viewport params
 extern bool  vpInvertXAxis;
 extern CVec3 viewOrigin;
 extern CAxis viewAxis;
+
+// lighting modes and controls
+enum
+{
+	LIGHTING_UNLIT = 0,  // Pure Anime Unlit (Default)
+	LIGHTING_STUDIO,     // Blender Studio HDRI
+	LIGHTING_SUNLIGHT,   // Blender Outdoor Sunlight
+	LIGHTING_HEADLAMP,   // Inspection Light
+	LIGHTING_LAST
+};
+
+extern int   GLightingMode;
+extern float GLightIntensity;
+extern float GLightYaw;
+extern float GLightPitch;
 
 
 // Display help about particular ket, should be called from AppDisplayTexts()

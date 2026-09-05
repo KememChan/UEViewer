@@ -20,6 +20,7 @@
 #include "UmodelApp.h"
 #include "UmodelCommands.h"
 #include "UmodelSettings.h"
+#include "Viewers/ViewerUI.h"
 
 #include "Exporters/Exporters.h"	// for WriteTGA
 
@@ -488,6 +489,18 @@ CUmodelApp::~CUmodelApp()
 #endif
 }
 
+void CUmodelApp::PreDraw3D(float TimeDelta)
+{
+	if (Viewer)
+		Viewer->PreDraw3D(TimeDelta);
+}
+
+CVec3 CUmodelApp::GetTrackedObjectOrigin() const
+{
+	return Viewer ? Viewer->GetObjectOrigin() : nullVec3;
+}
+
+
 void CUmodelApp::Draw3D(float TimeDelta)
 {
 	UObject *Obj = (UObject::GObjObjects.IsValidIndex(ObjIndex)) ? UObject::GObjObjects[ObjIndex] : NULL;
@@ -678,6 +691,35 @@ static void DumpMemory()
 
 #endif // MAX_DEBUG
 
+void CUmodelApp::OnInitGL()
+{
+	guard(CUmodelApp::OnInitGL);
+	ViewerUI::Init(GetWindow());
+	unguard;
+}
+
+void CUmodelApp::OnShutdownGL()
+{
+	guard(CUmodelApp::OnShutdownGL);
+	ViewerUI::Shutdown();
+	unguard;
+}
+
+bool CUmodelApp::FilterEvent(const SDL_Event* evt)
+{
+	if (!evt) return false;
+	return ViewerUI::ProcessEvent(evt);
+}
+
+void CUmodelApp::PostRender2D()
+{
+	guard(CUmodelApp::PostRender2D);
+	ViewerUI::NewFrame();
+	ViewerUI::Draw(Viewer);
+	ViewerUI::Render();
+	unguard;
+}
+
 void CUmodelApp::WindowCreated()
 {
 #if HAS_UI
@@ -712,6 +754,17 @@ void CUmodelApp::CreateMenu()
 			.SetCallback(BIND_LAMBDA([this]() { DoScreenshot = 1; }))
 			+ NewMenuItem("Screenshot with alpha\tAlt+S")
 			.SetCallback(BIND_LAMBDA([this]() { DoScreenshot = 2; }))
+			+ NewMenuSeparator()
+			+ NewSubmenu("Camera mode")
+			[
+				NewMenuRadioGroup(&GCameraMode)
+				[
+					NewMenuRadioButton("Free camera", CAMERA_MODE_FREE)
+					.SetCallback(BIND_LAMBDA([]() { SetCameraMode(CAMERA_MODE_FREE); }))
+					+ NewMenuRadioButton("Orbit & follow object (Blender)\tCtrl+F", CAMERA_MODE_ORBIT_OBJECT)
+					.SetCallback(BIND_LAMBDA([]() { SetCameraMode(CAMERA_MODE_ORBIT_OBJECT); }))
+				]
+			]
 			+ NewMenuSeparator()
 			+ NewMenuCheckbox("Show debug information\tCtrl+Q", &GShowDebugInfo)
 		]

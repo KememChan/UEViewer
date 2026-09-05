@@ -25,10 +25,16 @@ public:
 	virtual ~CUmodelApp();
 
 	virtual void WindowCreated();
-	virtual void Draw3D(float TimeDelta);
-	virtual void DrawTexts();
-	virtual void BeforeSwap();
-	virtual void ProcessKey(unsigned key, bool isDown);
+	virtual void OnInitGL() override;
+	virtual void OnShutdownGL() override;
+	virtual bool FilterEvent(const SDL_Event* evt) override;
+	virtual void PreDraw3D(float TimeDelta) override;
+	virtual void Draw3D(float TimeDelta) override;
+	virtual void DrawTexts() override;
+	virtual void PostRender2D() override;
+	virtual void BeforeSwap() override;
+	virtual void ProcessKey(unsigned key, bool isDown) override;
+	virtual CVec3 GetTrackedObjectOrigin() const override;
 
 	// Release all loaded objects from memory, so any package loading or unloading operation
 	// will be safe for viewer

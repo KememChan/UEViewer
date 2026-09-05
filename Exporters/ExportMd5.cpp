@@ -385,3 +385,79 @@ void ExportMd5Anim(const CAnimSet *Anim)
 
 	unguard;
 }
+
+void ExportSingleMd5Anim(const CAnimSet* Anim, int SeqIndex)
+{
+	guard(ExportSingleMd5Anim);
+	if (!Anim || SeqIndex < 0 || SeqIndex >= Anim->Sequences.Num()) return;
+
+	int numBones = Anim->TrackBoneNames.Num();
+	const UObject *OriginalAnim = Anim->OriginalAnim;
+	const CAnimSequence &S = *Anim->Sequences[SeqIndex];
+
+	FArchive *Ar = CreateExportArchive(OriginalAnim, EFileArchiveOptions::TextFile, "%s/%s.md5anim", OriginalAnim->Name, *S.Name);
+	if (!Ar) return;
+
+	Ar->Printf(
+		"MD5Version 10\n"
+		"commandline \"Created with UE Viewer\"\n"
+		"\n"
+		"numFrames %d\n"
+		"numJoints %d\n"
+		"frameRate %g\n"
+		"numAnimatedComponents %d\n"
+		"\n",
+		S.NumFrames,
+		numBones,
+		S.Rate,
+		numBones * 6
+	);
+
+	// skeleton
+	Ar->Printf("hierarchy {\n");
+	for (int i = 0; i < numBones; i++)
+	{
+		Ar->Printf("\t\"%s\" %d %d %d\n", *Anim->TrackBoneNames[i], (i == 0) ? -1 : 0, 63, i * 6);
+	}
+
+	// bounds
+	Ar->Printf("}\n\nbounds {\n");
+	for (int i = 0; i < S.NumFrames; i++)
+		Ar->Printf("\t( -100 -100 -100 ) ( 100 100 100 )\n");
+	Ar->Printf("}\n\n");
+
+	// baseframe and frames
+	for (int Frame = -1; Frame < S.NumFrames; Frame++)
+	{
+		int t = Frame;
+		if (Frame == -1)
+		{
+			Ar->Printf("baseframe {\n");
+			t = 0;
+		}
+		else
+			Ar->Printf("frame %d {\n", Frame);
+
+		for (int b = 0; b < numBones; b++)
+		{
+			CVec3 BP;
+			CQuat BO;
+			S.Tracks[b]->GetBonePosition(t, S.NumFrames, false, BP, BO);
+			if (!b) BO.Conjugate();			// root bone
+#if MIRROR_MESH
+			BO.Y  *= -1;
+			BO.W  *= -1;
+			BP[1] *= -1;					// y
+#endif
+			if (BO.W < 0) BO.Negate();		// W-component of quaternion will be removed ...
+			if (Frame < 0)
+				Ar->Printf("\t( %f %f %f ) ( %.10f %.10f %.10f )\n", VECTOR_ARG(BP), BO.X, BO.Y, BO.Z);
+			else
+				Ar->Printf("\t%f %f %f %.10f %.10f %.10f\n", VECTOR_ARG(BP), BO.X, BO.Y, BO.Z);
+		}
+		Ar->Printf("}\n\n");
+	}
+
+	delete Ar;
+	unguard;
+}

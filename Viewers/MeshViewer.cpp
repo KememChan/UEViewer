@@ -79,6 +79,12 @@ void CMeshViewer::DrawMesh(CMeshInstance *Inst)
 	Inst->Draw(DrawFlags);
 }
 
+CVec3 CMeshViewer::GetObjectOrigin() const
+{
+	return Inst ? Inst->GetMeshOrigin() : nullVec3;
+}
+
+
 
 void CMeshViewer::DisplayUV(const CMeshVertex* Verts, int VertexSize, const CBaseMeshLod* Mesh, int UVIndex)
 {

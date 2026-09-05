@@ -657,6 +657,8 @@ const CShader &GL_UseGenericShader(GenericShaderType type)
 	Sh.Use();
 	Sh.SetUniform("useLighting", glIsEnabled(GL_LIGHTING));
 	Sh.SetUniform("eyeLocation", viewOrigin);
+	Sh.SetUniform("lightingMode", GLightingMode);
+	Sh.SetUniform("lightIntensity", GLightIntensity);
 	return Sh;
 
 	unguardf("type=%d", type);
@@ -747,11 +749,11 @@ void GL_NormalmapShader(CShader &shader, CMaterialParams &Params)
 		{
 			// Ideally should analyze metalness: when metallic=1, reflect environment (white) color. When
 			// metallic=0, reflect material's diffuse color.
-			specularExpr = "(GetMaterialDiffuseColor(TexCoord).rgb * texture2D(spPowTex, TexCoord).r * 0.2) * gl_FrontMaterial.shininess";
+			specularExpr = "(GetMaterialDiffuseColor(TexCoord).rgb * texture2D(spPowTex, TexCoord).r * 0.08 + vec3(0.04))";
 		}
 		else
 		{
-			specularExpr = "vec3(1.0)";
+			specularExpr = "vec3(0.04)";
 		}
 	}
 	// specular power
@@ -899,6 +901,8 @@ void GL_NormalmapShader(CShader &shader, CMaterialParams &Params)
 	shader.SetUniform("emisTex",  I_Emissive);
 	shader.SetUniform("cubeTex",  I_Cube);
 	shader.SetUniform("maskTex",  I_Mask);
+	shader.SetUniform("lightingMode", GLightingMode);
+	shader.SetUniform("lightIntensity", GLightIntensity);
 
 	unguard;
 }
@@ -2492,25 +2496,33 @@ void UMaterialInstanceConstant::GetParams(CMaterialParams &Params) const
 			EMISSIVE(strstr(Name, "cubemap_mask"), 100);
 		}
 #endif // DISHONORED
-#if UNREAL4
-		if (ArGame >= GAME_UE4_BASE)
-		{
-			// PRB material, no specular color
-			Params.PBRMaterial = true;
-			if (Params.Specular)
-			{
-				Params.SpecPower = Params.Specular;
-				Params.Specular = NULL;
-			}
-			if (ParemtParams.Emissive == Params.Emissive &&
-				ParemtParams.Diffuse != Params.Diffuse)
-			{
-				// Reset emissive if it came from parent, and diffuse has been changed locally
-				Params.Emissive = NULL;
-			}
-		}
-#endif // UNREA:4
 	}
+#if UNREAL4
+	if (ArGame >= GAME_UE4_BASE)
+	{
+		// PBR material, no specular color
+		Params.PBRMaterial = true;
+		if (Params.Specular)
+		{
+			Params.SpecPower = Params.Specular;
+			Params.Specular = NULL;
+		}
+		if (ParemtParams.Diffuse != Params.Diffuse)
+		{
+			// Reset properties inherited from parent template if diffuse has been changed locally
+			if (ParemtParams.Emissive == Params.Emissive)
+				Params.Emissive = NULL;
+			if (ParemtParams.Normal == Params.Normal)
+				Params.Normal = NULL;
+			if (ParemtParams.SpecPower == Params.SpecPower)
+				Params.SpecPower = NULL;
+			if (ParemtParams.Specular == Params.Specular)
+				Params.Specular = NULL;
+			if (ParemtParams.Cube == Params.Cube)
+				Params.Cube = NULL;
+		}
+	}
+#endif // UNREAL4
 	for (i = 0; i < VectorParameterValues.Num(); i++)
 	{
 		const FVectorParameterValue &P = VectorParameterValues[i];

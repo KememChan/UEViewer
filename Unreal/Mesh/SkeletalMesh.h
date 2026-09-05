@@ -283,7 +283,8 @@ public:
 	int						NumFrames;
 	float					Rate;
 	TArray<CAnimTrack*>		Tracks;					// for each CAnimSet.TrackBoneNames
-	bool					bAdditive;				// used just for on-screen information
+	bool					bAdditive;				// whether sequence is additive
+	int						AdditiveType;			// 0 = AAT_None, 1 = AAT_LocalSpaceBase, 2 = AAT_RotationOffsetMeshSpace
 	const UObject*			OriginalSequence;
 	TArray<CSkeletonBonePosition> RetargetBasePose;
 #if ANIM_DEBUG_INFO
@@ -292,6 +293,7 @@ public:
 
 	CAnimSequence(const UObject* Original = NULL)
 	: bAdditive(false)
+	, AdditiveType(0)
 	, OriginalSequence(Original)
 	{}
 

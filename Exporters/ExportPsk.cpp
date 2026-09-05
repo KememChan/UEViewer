@@ -552,11 +552,12 @@ const UObject* GetPrimaryAnimObject(const CAnimSet* Anim)
 	unguard;
 }
 
-static void DoExportPsa(const CAnimSet* Anim, const UObject* OriginalAnim)
+static void DoExportPsa(const CAnimSet* Anim, const UObject* OriginalAnim, const char* FilenameOverride = NULL)
 {
 	guard(DoExportPsa);
 
-	FArchive* Ar0 = CreateExportArchive(OriginalAnim, EFileArchiveOptions::Default, "%s.psa", OriginalAnim->Name);
+	const char* outName = (FilenameOverride && FilenameOverride[0]) ? FilenameOverride : OriginalAnim->Name;
+	FArchive* Ar0 = CreateExportArchive(OriginalAnim, EFileArchiveOptions::Default, "%s.psa", outName);
 	if (!Ar0) return;
 	FArchive &Ar = *Ar0;						// use "Ar << obj" instead of "(*Ar) << obj"
 
@@ -710,7 +711,7 @@ static void DoExportPsa(const CAnimSet* Anim, const UObject* OriginalAnim)
 	FArchive *Ar1 = NULL;
 	if (bSaveConfig)
 	{
-		Ar1 = CreateExportArchive(OriginalAnim, EFileArchiveOptions::TextFile, "%s.config", OriginalAnim->Name);
+		Ar1 = CreateExportArchive(OriginalAnim, EFileArchiveOptions::TextFile, "%s.config", outName);
 	}
 
 	if (Ar1)
@@ -771,7 +772,7 @@ static void DoExportPsa(const CAnimSet* Anim, const UObject* OriginalAnim)
 	//todo: .props.txt is not saved when multiple animations are stored in a single .psa file
 	if (OriginalAnim->GetTypeinfo()->NumProps)
 	{
-		FArchive* PropAr = CreateExportArchive(OriginalAnim, EFileArchiveOptions::TextFile, "%s.props.txt", OriginalAnim->Name);
+		FArchive* PropAr = CreateExportArchive(OriginalAnim, EFileArchiveOptions::TextFile, "%s.props.txt", outName);
 		if (PropAr)
 		{
 			OriginalAnim->GetTypeinfo()->SaveProps(OriginalAnim, *PropAr);
@@ -840,6 +841,35 @@ void ExportPsa(const CAnimSet* Anim)
 #endif
 		unguard;
 	}
+}
+
+void ExportSinglePsa(const CAnimSet* Anim, int SeqIndex)
+{
+	guard(ExportSinglePsa);
+	if (!Anim || SeqIndex < 0 || SeqIndex >= Anim->Sequences.Num()) return;
+
+	const CAnimSequence* Seq = Anim->Sequences[SeqIndex];
+
+	CAnimSet TempAnimSet;
+	TempAnimSet.CopyAllButSequences(*Anim);
+	TempAnimSet.Sequences.Add(const_cast<CAnimSequence*>(Seq));
+
+	const UObject* TargetObj = Anim->OriginalAnim;
+#if UNREAL4
+	if (Anim->OriginalAnim && Anim->OriginalAnim->IsA("Skeleton"))
+	{
+		const USkeleton* Skeleton = static_cast<const USkeleton*>(Anim->OriginalAnim);
+		if (Skeleton->OriginalAnims.IsValidIndex(SeqIndex))
+		{
+			TargetObj = Skeleton->OriginalAnims[SeqIndex];
+		}
+	}
+#endif
+
+	DoExportPsa(&TempAnimSet, TargetObj, *Seq->Name);
+
+	TempAnimSet.Sequences.Empty();
+	unguard;
 }
 
 

@@ -65,10 +65,16 @@ class CStaticMesh;
 // ActorX
 void ExportPsk(const CSkeletalMesh* Mesh);
 void ExportPsa(const CAnimSet* Anim);
+void ExportSinglePsa(const CAnimSet* Anim, int SeqIndex);
 void ExportStaticMesh(const CStaticMesh* Mesh);
 // MD5Mesh
 void ExportMd5Mesh(const CSkeletalMesh* Mesh);
 void ExportMd5Anim(const CAnimSet* Anim);
+void ExportSingleMd5Anim(const CAnimSet* Anim, int SeqIndex);
+// Single animation dispatch
+bool ExportSingleAnimation(const CAnimSet* Anim, int SeqIndex);
+typedef void (*SingleAnimExporterFunc_t)(const CAnimSet*, int);
+void RegisterSingleAnimExporter(SingleAnimExporterFunc_t Func);
 // glTF
 void ExportSkeletalMeshGLTF(const CSkeletalMesh* Mesh);
 void ExportStaticMeshGLTF(const CStaticMesh* Mesh);

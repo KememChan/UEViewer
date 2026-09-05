@@ -48,19 +48,15 @@ static void CheckSDLError()
 
 #endif // SDL_CHECK_ERROR
 
-#if LIGHTING_MODES
+int   GLightingMode   = LIGHTING_UNLIT;
+float GLightIntensity = 1.0f;
+float GLightYaw       = 45.0f;
+float GLightPitch     = 35.0f;
+static unsigned lightHUDTimer = 0;
 
-enum
-{
-	LIGHTING_NONE,
-	LIGHTING_SPECULAR,
-	LIGHTING_DIFFUSE,
-	LIGHTING_LAST
-};
-
-static int lightingMode = LIGHTING_SPECULAR;
-
-#endif // LIGHTING_MODES
+int   GCameraMode     = CAMERA_MODE_ORBIT_OBJECT;
+static unsigned cameraHUDTimer = 0;
+static CApplication* GCurrentApp = NULL;
 
 
 //-----------------------------------------------------------------------------
@@ -188,14 +184,60 @@ static void Set3Dmode()
 //	glCullFace(GL_FRONT);
 }
 
+static void RecomputeViewOrigin(const CVec3 &objOrigin)
+{
+	CAxis axis;
+	axis.FromEuler(viewAngles);
+	viewDist = bound(viewDist, MIN_DIST * distScale, MAX_DIST * distScale);
+	VectorScale(axis[0], -viewDist, viewOrigin);
+	viewOrigin.Add(rotOrigin);
+	viewOrigin.Add(viewOffset);
+	if (GCameraMode == CAMERA_MODE_ORBIT_OBJECT)
+	{
+		viewOrigin.Add(objOrigin);
+	}
+}
+
+void SetCameraMode(int newMode)
+{
+	if (newMode == GCameraMode) return;
+
+	CVec3 objOrigin = GCurrentApp ? GCurrentApp->GetTrackedObjectOrigin() : nullVec3;
+
+	if (newMode == CAMERA_MODE_ORBIT_OBJECT)
+	{
+		// Transitioning from Free Camera to Orbit Object:
+		// Free camera pivot was: rotOrigin + viewOffset
+		// Orbit Object pivot is: rotOrigin' + objOrigin + viewOffset
+		// Set rotOrigin' = rotOrigin - objOrigin so that world position remains identical
+		rotOrigin.Sub(objOrigin);
+	}
+	else
+	{
+		// Transitioning from Orbit Object to Free Camera:
+		// Orbit Object pivot was: rotOrigin + objOrigin + viewOffset
+		// Free camera pivot is: rotOrigin' + viewOffset
+		// Set rotOrigin' = rotOrigin + objOrigin so that world position remains identical
+		rotOrigin.Add(objOrigin);
+	}
+
+	GCameraMode = newMode;
+	cameraHUDTimer = appMilliseconds() + 2000;
+	RecomputeViewOrigin(objOrigin);
+}
+
 void ResetView()
 {
 	viewAngles.Set(0, 180, 0);
 	viewDist = DEFAULT_DIST * distScale;
-	viewOrigin.Set(DEFAULT_DIST * distScale, 0, 0);
-	viewOrigin.Add(viewOffset);
 	rotOrigin.Zero();
 	yFov = DEFAULT_FOV;
+	GLightYaw = 45.0f;
+	GLightPitch = 35.0f;
+	GLightIntensity = 1.0f;
+
+	CVec3 objOrigin = (GCurrentApp && GCameraMode == CAMERA_MODE_ORBIT_OBJECT) ? GCurrentApp->GetTrackedObjectOrigin() : nullVec3;
+	RecomputeViewOrigin(objOrigin);
 }
 
 void SetDistScale(float scale)
@@ -208,6 +250,36 @@ void SetViewOffset(const CVec3 &offset)
 {
 	viewOffset = offset;
 	ResetView();
+}
+
+float GetCameraFOV()
+{
+	return yFov;
+}
+
+void SetCameraFOV(float fov)
+{
+	fov = bound(fov, 10.0f, 120.0f);
+	if (fov != yFov)
+	{
+		float oldFov = yFov;
+		yFov = fov;
+		float s = tan(oldFov * M_PI / 360) / tan(yFov * M_PI / 360);
+		distScale *= s;
+		viewDist  *= s;
+		MoveCamera(0, 0, 0, 0, 0);
+	}
+}
+
+float GetCameraDistance()
+{
+	return viewDist;
+}
+
+void SetCameraDistance(float dist)
+{
+	viewDist = bound(dist, MIN_DIST * distScale, MAX_DIST * distScale);
+	MoveCamera(0, 0, 0, 0, 0);
 }
 
 //-----------------------------------------------------------------------------
@@ -345,6 +417,31 @@ static void OnMouseMove(int mx, int my)
 	if (vpInvertXAxis)
 		xDelta = -xDelta;
 
+	if (SDL_GetModState() & (KMOD_LCTRL | KMOD_RCTRL))
+	{
+		bool lightChanged = false;
+		if (Viewport::MouseButtons & SDL_BUTTON(SDL_BUTTON_LEFT))
+		{
+			GLightYaw   += -xDelta * 360.0f;
+			GLightPitch +=  yDelta * 360.0f;
+			GLightYaw    = fmod(GLightYaw, 360.0f);
+			if (GLightYaw < 0.0f) GLightYaw += 360.0f;
+			GLightPitch  = bound(GLightPitch, -85.0f, 85.0f);
+			lightChanged = true;
+		}
+		if (Viewport::MouseButtons & SDL_BUTTON(SDL_BUTTON_RIGHT))
+		{
+			GLightIntensity -= yDelta * 2.0f;
+			GLightIntensity  = bound(GLightIntensity, 0.0f, 3.0f);
+			lightChanged = true;
+		}
+		if (lightChanged)
+		{
+			lightHUDTimer = appMilliseconds() + 1500;
+			return;
+		}
+	}
+
 	float YawDelta = 0, PitchDelta = 0, DistDelta = 0, PanX = 0, PanY = 0;
 
 	if (Viewport::MouseButtons & SDL_BUTTON(SDL_BUTTON_LEFT))
@@ -389,24 +486,24 @@ void MoveCamera(float YawDelta, float PitchDelta, float DistDelta, float PanX, f
 	VectorMA(rotOrigin, PanY, axis[2]);
 
 	// recompute viewOrigin
-	viewDist = bound(viewDist, MIN_DIST * distScale, MAX_DIST * distScale);
-	VectorScale(axis[0], -viewDist, viewOrigin);
-	viewOrigin.Add(rotOrigin);
-	viewOrigin.Add(viewOffset);
+	CVec3 objOrigin = (GCurrentApp && GCameraMode == CAMERA_MODE_ORBIT_OBJECT) ? GCurrentApp->GetTrackedObjectOrigin() : nullVec3;
+	RecomputeViewOrigin(objOrigin);
 }
 
 
 void FocusCameraOnPoint(const CVec3 &center)
 {
-	rotOrigin = center;
+	if (GCameraMode == CAMERA_MODE_ORBIT_OBJECT)
+	{
+		rotOrigin.Zero();
+	}
+	else
+	{
+		rotOrigin = center;
+	}
 
-	CAxis axis;
-	axis.FromEuler(viewAngles);
-	// recompute viewOrigin
-	viewDist = bound(viewDist, MIN_DIST * distScale, MAX_DIST * distScale);
-	VectorScale(axis[0], -viewDist, viewOrigin);
-	viewOrigin.Add(rotOrigin);
-	viewOrigin.Add(viewOffset);
+	CVec3 objOrigin = (GCurrentApp && GCameraMode == CAMERA_MODE_ORBIT_OBJECT) ? GCurrentApp->GetTrackedObjectOrigin() : nullVec3;
+	RecomputeViewOrigin(objOrigin);
 }
 
 
@@ -543,6 +640,9 @@ static void Init(const char *caption)
 	// initialize GL
 	ResizeWindow(Viewport::Size.X, Viewport::Size.Y);
 
+	if (GCurrentApp)
+		GCurrentApp->OnInitGL();
+
 //	appPrintf("OpenGL %s / GLSL %s / %s\n",
 //		glGetString(GL_VERSION),
 //		glGetString(GL_SHADING_LANGUAGE_VERSION),
@@ -554,6 +654,8 @@ static void Init(const char *caption)
 static void Shutdown()
 {
 	guard(Shutdown);
+	if (GCurrentApp)
+		GCurrentApp->OnShutdownGL();
 	SDL_QuitSubSystem(SDL_INIT_VIDEO);
 	InvalidateContext();
 	unguard;
@@ -716,48 +818,158 @@ void CApplication::Display()
 	if (useBloom) PostEffectPrepare(FBO);
 #endif // USE_BLOOM
 
+	PreDraw3D(TimeDelta);
+
+	if (GCameraMode == CAMERA_MODE_ORBIT_OBJECT)
+	{
+		CVec3 objOrigin = GetTrackedObjectOrigin();
+		RecomputeViewOrigin(objOrigin);
+	}
+
 	DrawBackground();
 
 	// 3D drawings
 	BuildMatrices();
 	Set3Dmode();
 
-	// enable lighting
-	static const float lightPos[4]      = {1000, 2000, 2000,  0};
-	static const float lightAmbient[4]  = {0.1f, 0.1f, 0.15f, 1};
-	static const float specIntens[4]    = {0.4f, 0.4f, 0.4f,  0};
-	static const float black[4]         = {0,   0,   0,    0};
-	static const float white[4]         = {1,   1,   1,    0};
+	// Studio Three-Point Lighting Setup (Key, Fill, Rim)
+	float keyPos[4];
+	float fillPos[4];
+	float rimPos[4];
+
+	if (GLightingMode == LIGHTING_HEADLAMP)
+	{
+		// In headlamp mode, key light shines from camera position
+		keyPos[0] = -viewAxis[0].X * 10000.0f;
+		keyPos[1] = -viewAxis[0].Y * 10000.0f;
+		keyPos[2] = -viewAxis[0].Z * 10000.0f;
+		keyPos[3] = 0.0f;
+
+		// Soft fill from below
+		fillPos[0] = 0.0f;
+		fillPos[1] = 0.0f;
+		fillPos[2] = -10000.0f;
+		fillPos[3] = 0.0f;
+
+		// Rim from behind camera target
+		rimPos[0] = viewAxis[0].X * 10000.0f;
+		rimPos[1] = viewAxis[0].Y * 10000.0f;
+		rimPos[2] = viewAxis[0].Z * 10000.0f;
+		rimPos[3] = 0.0f;
+	}
+	else
+	{
+		// Key light direction based on GLightYaw and GLightPitch
+		float radYaw   = GLightYaw * (M_PI / 180.0f);
+		float radPitch = GLightPitch * (M_PI / 180.0f);
+		keyPos[0] = cosf(radPitch) * cosf(radYaw) * 10000.0f;
+		keyPos[1] = cosf(radPitch) * sinf(radYaw) * 10000.0f;
+		keyPos[2] = sinf(radPitch) * 10000.0f;
+		keyPos[3] = 0.0f;
+
+		// Fill light: opposite key light azimuth (+140 deg), lower elevation (-25 deg)
+		float fillYaw   = (GLightYaw + 140.0f) * (M_PI / 180.0f);
+		float fillPitch = -25.0f * (M_PI / 180.0f);
+		fillPos[0] = cosf(fillPitch) * cosf(fillYaw) * 10000.0f;
+		fillPos[1] = cosf(fillPitch) * sinf(fillYaw) * 10000.0f;
+		fillPos[2] = sinf(fillPitch) * 10000.0f;
+		fillPos[3] = 0.0f;
+
+		// Rim light: directly behind character (+180 deg), elevated (+45 deg)
+		float rimYaw   = (GLightYaw + 180.0f) * (M_PI / 180.0f);
+		float rimPitch = 45.0f * (M_PI / 180.0f);
+		rimPos[0] = cosf(rimPitch) * cosf(rimYaw) * 10000.0f;
+		rimPos[1] = cosf(rimPitch) * sinf(rimYaw) * 10000.0f;
+		rimPos[2] = sinf(rimPitch) * 10000.0f;
+		rimPos[3] = 0.0f;
+	}
+
+	// Calibrated colors and intensities
+	float keyDiffuse[4]  = { 0.70f * GLightIntensity, 0.68f * GLightIntensity, 0.68f * GLightIntensity, 1.0f };
+	float keyAmbient[4]  = { 0.25f * GLightIntensity, 0.26f * GLightIntensity, 0.28f * GLightIntensity, 1.0f };
+	float keySpecular[4] = { 0.15f * GLightIntensity, 0.15f * GLightIntensity, 0.15f * GLightIntensity, 1.0f };
+
+	float fillDiffuse[4] = { 0.22f * GLightIntensity, 0.23f * GLightIntensity, 0.26f * GLightIntensity, 1.0f };
+	float fillAmbient[4] = { 0.10f * GLightIntensity, 0.09f * GLightIntensity, 0.08f * GLightIntensity, 1.0f };
+	float fillSpecular[4]= { 0.0f, 0.0f, 0.0f, 1.0f };
+
+	float rimDiffuse[4]  = { 0.25f * GLightIntensity, 0.25f * GLightIntensity, 0.28f * GLightIntensity, 1.0f };
+	float rimAmbient[4]  = { 0.0f, 0.0f, 0.0f, 1.0f };
+	float rimSpecular[4] = { 0.10f * GLightIntensity, 0.10f * GLightIntensity, 0.10f * GLightIntensity, 1.0f };
+
+	static const float black[4]   = { 0.0f, 0.0f, 0.0f, 1.0f };
+	static const float white[4]   = { 1.0f, 1.0f, 1.0f, 1.0f };
+	static const float matSpec[4] = { 0.15f, 0.15f, 0.15f, 1.0f };
+
+	if (GLightingMode == LIGHTING_UNLIT)
+	{
+		// Unlit mode: full flat ambient, zero diffuse/specular
+		keyDiffuse[0] = keyDiffuse[1] = keyDiffuse[2] = 0.0f;
+		keyAmbient[0] = keyAmbient[1] = keyAmbient[2] = 1.0f * GLightIntensity;
+		keySpecular[0] = keySpecular[1] = keySpecular[2] = 0.0f;
+
+		fillDiffuse[0] = fillDiffuse[1] = fillDiffuse[2] = 0.0f;
+		fillAmbient[0] = fillAmbient[1] = fillAmbient[2] = 0.0f;
+
+		rimDiffuse[0] = rimDiffuse[1] = rimDiffuse[2] = 0.0f;
+		rimSpecular[0] = rimSpecular[1] = rimSpecular[2] = 0.0f;
+	}
+	else if (GLightingMode == LIGHTING_SUNLIGHT)
+	{
+		keyDiffuse[0] = 0.90f * GLightIntensity;
+		keyDiffuse[1] = 0.88f * GLightIntensity;
+		keyDiffuse[2] = 0.82f * GLightIntensity;
+
+		keyAmbient[0] = 0.22f * GLightIntensity;
+		keyAmbient[1] = 0.25f * GLightIntensity;
+		keyAmbient[2] = 0.30f * GLightIntensity;
+
+		keySpecular[0] = keySpecular[1] = keySpecular[2] = 0.20f * GLightIntensity;
+
+		fillDiffuse[0] = 0.15f * GLightIntensity;
+		fillDiffuse[1] = 0.15f * GLightIntensity;
+		fillDiffuse[2] = 0.12f * GLightIntensity;
+	}
+
 	glEnable(GL_COLOR_MATERIAL);
-//	glColorMaterial(GL_FRONT,GL_AMBIENT_AND_DIFFUSE);
+	glEnable(GL_NORMALIZE);
 	glEnable(GL_LIGHT0);
-	glEnable(GL_NORMALIZE);		// allow non-normalized normal arrays
-//	glEnable(GL_LIGHTING);
-	// light parameters
-	glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
-	glLightfv(GL_LIGHT0, GL_DIFFUSE,  white);
-	glLightfv(GL_LIGHT0, GL_AMBIENT,  lightAmbient);
-	glLightfv(GL_LIGHT0, GL_SPECULAR, white);
-	// material parameters
+	glEnable(GL_LIGHT1);
+	glEnable(GL_LIGHT2);
+
+	// Light 0 (Key)
+	glLightfv(GL_LIGHT0, GL_POSITION, keyPos);
+	glLightfv(GL_LIGHT0, GL_DIFFUSE,  keyDiffuse);
+	glLightfv(GL_LIGHT0, GL_AMBIENT,  keyAmbient);
+	glLightfv(GL_LIGHT0, GL_SPECULAR, keySpecular);
+
+	// Light 1 (Fill)
+	glLightfv(GL_LIGHT1, GL_POSITION, fillPos);
+	glLightfv(GL_LIGHT1, GL_DIFFUSE,  fillDiffuse);
+	glLightfv(GL_LIGHT1, GL_AMBIENT,  fillAmbient);
+	glLightfv(GL_LIGHT1, GL_SPECULAR, fillSpecular);
+
+	// Light 2 (Rim)
+	glLightfv(GL_LIGHT2, GL_POSITION, rimPos);
+	glLightfv(GL_LIGHT2, GL_DIFFUSE,  rimDiffuse);
+	glLightfv(GL_LIGHT2, GL_AMBIENT,  rimAmbient);
+	glLightfv(GL_LIGHT2, GL_SPECULAR, rimSpecular);
+
+	// Material parameters
 	glMaterialfv(GL_FRONT, GL_DIFFUSE,  white);
 	glMaterialfv(GL_FRONT, GL_AMBIENT,  white);
-	glMaterialfv(GL_FRONT, GL_SPECULAR, specIntens);
-	glMaterialf (GL_FRONT, GL_SHININESS, 5);
-	// Use GL_EXT_separate_specular_color without check (in worst case GL error code will be set)
-	glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);
-#if LIGHTING_MODES
-	if (lightingMode == LIGHTING_NONE)
+	if (GLightingMode == LIGHTING_UNLIT)
 	{
-		// disable diffuse and saturate ambient
-		glLightfv(GL_LIGHT0, GL_DIFFUSE, black);
-		glLightfv(GL_LIGHT0, GL_AMBIENT, white);
-	}
-	if (lightingMode != LIGHTING_SPECULAR)
-	{
-		glMaterialf (GL_FRONT, GL_SHININESS, 1.0);
+		glMaterialf (GL_FRONT, GL_SHININESS, 1.0f);
 		glMaterialfv(GL_FRONT, GL_SPECULAR, black);
 	}
-#endif // LIGHTING_MODES
+	else
+	{
+		glMaterialfv(GL_FRONT, GL_SPECULAR, matSpec);
+		glMaterialf (GL_FRONT, GL_SHININESS, 40.0f);
+	}
+
+	glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);
 
 	// draw scene
 	Draw3D(TimeDelta);
@@ -771,6 +983,8 @@ void CApplication::Display()
 	glColor3f(1, 1, 1);
 	glDisable(GL_LIGHTING);
 	glDisable(GL_LIGHT0);
+	glDisable(GL_LIGHT1);
+	glDisable(GL_LIGHT2);
 
 #if USE_BLOOM
 	if (useBloom) BloomScene(FBO);
@@ -781,6 +995,8 @@ void CApplication::Display()
 
 	DrawTexts();
 	FlushTexts();
+
+	PostRender2D();
 
 	// swap buffers
 	BeforeSwap();
@@ -797,6 +1013,29 @@ void DrawKeyHelp(const char *Key, const char *Help)
 
 void CApplication::DrawTexts()
 {
+	if (cameraHUDTimer > appMilliseconds())
+	{
+		static const char* const modeNames[] = {
+			"Free Camera",
+			"Orbit & Follow Object (Blender style)"
+		};
+		const char* modeName = (GCameraMode >= 0 && GCameraMode < CAMERA_MODE_COUNT) ? modeNames[GCameraMode] : "Custom";
+		DrawTextBottomLeft(S_YELLOW "Camera: " S_WHITE "%s", modeName);
+	}
+
+	if (lightHUDTimer > appMilliseconds())
+	{
+		static const char* const modeNames[] = {
+			"Anime Unlit (Pure)",
+			"Blender Studio HDRI",
+			"Outdoor Sunlight",
+			"Headlamp"
+		};
+		const char* modeName = (GLightingMode >= 0 && GLightingMode < LIGHTING_LAST) ? modeNames[GLightingMode] : "Custom";
+		DrawTextBottomLeft(S_YELLOW "Light: " S_WHITE "%s  " S_CYAN "Yaw: " S_WHITE "%.0f deg  " S_CYAN "Pitch: " S_WHITE "%.0f deg  " S_CYAN "Brightness: " S_WHITE "%.2fx",
+			modeName, GLightYaw, GLightPitch, GLightIntensity);
+	}
+
 	// display help when needed
 	if (IsHelpVisible)
 	{
@@ -809,7 +1048,12 @@ void CApplication::DrawTexts()
 		DrawKeyHelp("LeftMouse",   "rotate view");
 		DrawKeyHelp("RightMouse",  "zoom view");
 		DrawKeyHelp("MiddleMouse", "move camera");
-		DrawKeyHelp("R",           "reset view");
+		DrawKeyHelp("Ctrl+F",      "cycle camera modes");
+		DrawKeyHelp("F",           "focus camera on object");
+		DrawKeyHelp("Ctrl+LeftMouse", "orbit light");
+		DrawKeyHelp("Ctrl+RightMouse", "adjust light brightness");
+		DrawKeyHelp("Ctrl+L",      "cycle lighting modes");
+		DrawKeyHelp("R",           "reset view & light");
 	}
 }
 
@@ -855,11 +1099,13 @@ void CApplication::ProcessKey(unsigned key, bool isDown)
 	case SDLK_KP_3|KEY_CTRL:
 		ScrollText(-1);
 		break;
-#if LIGHTING_MODES
 	case 'l'|KEY_CTRL:
-		if (++lightingMode == LIGHTING_LAST) lightingMode = 0;
+		if (++GLightingMode == LIGHTING_LAST) GLightingMode = 0;
+		lightHUDTimer = appMilliseconds() + 2000;
 		break;
-#endif
+	case 'f'|KEY_CTRL:
+		SetCameraMode((GCameraMode + 1) % CAMERA_MODE_COUNT);
+		break;
 	case 'g'|KEY_CTRL:
 		{
 			// enable/disable extensions and GLSL
@@ -959,6 +1205,8 @@ void CApplication::VisualizerLoop(const char *caption)
 {
 	guard(VisualizerLoop);
 
+	GCurrentApp = this;
+
 	Init(caption);
 	WindowCreated();
 	ClearTexts();
@@ -985,6 +1233,9 @@ void CApplication::VisualizerLoop(const char *caption)
 	{
 		while (SDL_PollEvent(&evt))
 		{
+			if (FilterEvent(&evt))
+				continue;
+
 			switch (evt.type)
 			{
 			case SDL_KEYDOWN:
@@ -1075,6 +1326,8 @@ void CApplication::VisualizerLoop(const char *caption)
 	}
 	// shutdown
 	Shutdown();
+
+	GCurrentApp = NULL;
 
 	unguard;
 }

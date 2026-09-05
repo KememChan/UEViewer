@@ -59,13 +59,16 @@ uniform sampler2D	emisTex;
 uniform samplerCube	cubeTex;
 uniform sampler2D	maskTex;
 
+uniform int			lightingMode;
+uniform float		lightIntensity;
+
 
 void VertexShaderMain()
 {
 	// light parameters
 	// gl_FrontMaterial.diffuse and gl_FrontMaterial.ambient are premultiplied by gl_Color (see docs/glsl.txt)
 	diffuse  = /*gl_FrontMaterial.diffuse * */ gl_Color * gl_LightSource[0].diffuse;
-	ambient  = /*gl_FrontMaterial.ambient * */ gl_Color * (gl_LightSource[0].ambient + gl_LightModel.ambient);
+	ambient  = /*gl_FrontMaterial.ambient * */ gl_Color * (gl_LightSource[0].ambient + gl_LightSource[1].ambient + gl_LightSource[2].ambient + gl_LightModel.ambient);
 	specular = gl_FrontMaterial.specular * gl_LightSource[0].specular;
 
 	// standard transformation code
@@ -82,8 +85,8 @@ void VertexShaderMain()
 	// eye-space parameters
 	// note: gl_LightSource.position is already transformed to eye-space
 	eyeVertexPos = (gl_ModelViewMatrix * gl_Vertex).xyz;		// vertex position in eye space
-	vec3 eyeLightPos  = gl_LightSource[0].position.xyz;				// direction to light in eye space
-	tangentLightDir = normalize(tbn * (eyeLightPos - eyeVertexPos));
+	vec3 eyeLightPos  = (gl_LightSource[0].position.w == 0.0) ? gl_LightSource[0].position.xyz : (gl_LightSource[0].position.xyz - eyeVertexPos);
+	tangentLightDir = normalize(tbn * eyeLightPos);
 
 #ifdef NEEDS_TANGENT_TO_WORLD
 	// matrix for conversion of tangent space vector to world space
@@ -150,19 +153,64 @@ void PixelShaderMain()
 {
 	vec2 TexCoord  = gl_TexCoord[0].st;
 
+#if DIFFUSE
+	vec4 diffTexColor = GetMaterialDiffuseColor(TexCoord);
+#else
+	vec4 diffTexColor = vec4(1.0);
+#endif
+
+	// LIGHTING_UNLIT (Pure Anime Unlit):
+	// Return pure diffuse texture multiplied by brightness control.
+	// Completely bypasses normals, specular, and Fresnel.
+	if (lightingMode == 0)
+	{
+		gl_FragColor = vec4(diffTexColor.rgb * lightIntensity, diffTexColor.a * GetMaterialOpacity(TexCoord));
+		return;
+	}
+
 	vec3 normal    = GetMaterialNormal(TexCoord);
 	%s
+	// Reconstruct Normal Z if length is not unit (e.g. BC7/RG packed normal maps)
+	float xySq = dot(normal.xy, normal.xy);
+	if (xySq > 0.001 && abs(xySq + normal.z * normal.z - 1.0) > 0.05)
+	{
+		normal.z = sqrt(max(1.0 - xySq, 0.0001));
+	}
 	normal = normalize(normal);
 	vec3 nLightDir = normalize(tangentLightDir);
 	vec3 nEye      = normalize(tbn * -eyeVertexPos);	// eye is at (0,0,0), so direction to eye = -vertex
 
-	// ambient + diffuse
-	float NdotL    = max(dot(normal, nLightDir), 0.0);
-	vec4 color     = ambient + diffuse * NdotL;
+	// Soft wrapped diffuse for Key light (Half-Lambert)
+	float NdotL0   = dot(normal, nLightDir);
+	float wrapL0   = clamp((NdotL0 + 0.35) / 1.35, 0.0, 1.0);
+
+	// Blender Studio HDRI Hemispherical Irradiance
+	// World normal gives sky (+Z) vs ground (-Z) bounce
+	vec3 worldNormal = normalize(tangentToWorld * normal);
+	float upFactor   = clamp(worldNormal.z * 0.5 + 0.5, 0.0, 1.0);
+	vec3 skyColor    = vec3(0.36, 0.38, 0.42) * lightIntensity;
+	vec3 groundColor = vec3(0.18, 0.17, 0.16) * lightIntensity;
+	vec3 iblAmbient  = mix(groundColor, skyColor, upFactor);
+
+	vec3 totalLight  = iblAmbient + diffuse.rgb * wrapL0;
+
+	// Fill light (GL_LIGHT1)
+	vec3 fillDirEye = (gl_LightSource[1].position.w == 0.0) ? gl_LightSource[1].position.xyz : (gl_LightSource[1].position.xyz - eyeVertexPos);
+	vec3 nFillDir   = normalize(tbn * fillDirEye);
+	float NdotL1    = dot(normal, nFillDir);
+	float wrapL1    = clamp((NdotL1 + 0.25) / 1.25, 0.0, 1.0);
+	totalLight += gl_Color.rgb * gl_LightSource[1].diffuse.rgb * wrapL1;
+
+	// Rim light (GL_LIGHT2)
+	vec3 rimDirEye  = (gl_LightSource[2].position.w == 0.0) ? gl_LightSource[2].position.xyz : (gl_LightSource[2].position.xyz - eyeVertexPos);
+	vec3 nRimDir    = normalize(tbn * rimDirEye);
+	float NdotL2    = max(dot(normal, nRimDir), 0.0);
+	totalLight += gl_Color.rgb * gl_LightSource[2].diffuse.rgb * (NdotL2 * 0.5);
+
+	vec4 color = vec4(totalLight, ambient.a);
 
 #if DIFFUSE
-	vec4 diffuse   = GetMaterialDiffuseColor(TexCoord);
-	color *= diffuse;
+	color.rgb *= diffTexColor.rgb;
 #endif
 
 #ifdef SHOW_BUMP
@@ -170,13 +218,21 @@ void PixelShaderMain()
 #endif
 
 #ifdef SPECULAR
-	// specular
-	// per-pixel half vector: average between direction from pixel to
-	// light and from pixel to viewer
+	// specular: masked by key light visibility so shadows don't glow
+	vec3 specCol    = GetMaterialSpecularColor(TexCoord);
 	vec3 halfVector = nLightDir + nEye;
 	vec3 halfV      = normalize(halfVector);
 	float NdotHV    = max(dot(normal, halfV), 0.0);
-	color.rgb += pow(NdotHV, GetMaterialSpecularPower(TexCoord)) * GetMaterialSpecularColor(TexCoord);
+	if (length(specCol) > 0.005)
+	{
+		float specVis   = smoothstep(-0.05, 0.20, NdotL0);
+		float specPower = clamp(GetMaterialSpecularPower(TexCoord), 1.0, 128.0);
+		color.rgb += pow(NdotHV, specPower) * specCol * specVis;
+
+		// Subtle Fresnel grazing sheen
+		float fresnel   = pow(clamp(1.0 - max(dot(normal, nEye), 0.0), 0.0, 1.0), 4.0) * 0.15;
+		color.rgb += specCol * fresnel * (wrapL0 * 0.7 + 0.3);
+	}
 #endif // SPECULAR
 
 #ifdef SHOW_SPECULAR
@@ -199,10 +255,6 @@ void PixelShaderMain()
 
 	color.a = GetMaterialOpacity(TexCoord);
 
-//	color.rgb = vec3(dot(normal, nEye), 0.3, 0.3);
-//	color.rgb = (normal * 0.5) + 0.5;
-//	color.rgb = (nEye * 0.5) + 0.5;
-//	color.rgb += pow(1.0 - dot(normal, nEye), 3.5) * vec3(0.5);	// Fresnel
 #ifdef NORMALMAP
 	color.rgb = pow(dot(normal, nEye), 3.5) * vec3(1.0);
 #endif

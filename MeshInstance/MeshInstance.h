@@ -39,6 +39,10 @@ public:
 	static unsigned GetMaterialDebugColor(int Index);
 	void SetMaterial(UUnrealMaterial *Mat, int Index);
 	virtual void Draw(unsigned flags = 0) = 0;
+	virtual CVec3 GetMeshOrigin() const
+	{
+		return nullVec3;
+	}
 };
 
 
@@ -224,13 +228,21 @@ public:
 	int GetAnimCount() const;
 	const char *GetAnimName(int Index) const;
 	void UpdateAnimation(float TimeDelta);
+	void SetAnimRate(float Rate, int Channel = 0)
+	{
+		GetStage(Channel).Rate = Rate;
+	}
+	float GetAnimRate(int Channel = 0) const
+	{
+		return GetStage(Channel).Rate;
+	}
 
 	const CAnimSet *GetAnim() const
 	{
 		return Animation;
 	}
 
-	CVec3 GetMeshOrigin() const;
+	virtual CVec3 GetMeshOrigin() const override;
 
 protected:
 	const CAnimSet*		Animation;

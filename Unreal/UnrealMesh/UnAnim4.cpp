@@ -862,6 +862,7 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 	Dst->NumFrames = Seq->NumFrames;
 	Dst->Rate      = Seq->NumFrames / Seq->SequenceLength * Seq->RateScale;
 	Dst->bAdditive = Seq->AdditiveAnimType != AAT_None;
+	Dst->AdditiveType = (int)Seq->AdditiveAnimType;
 
 	// Store information for animation retargeting.
 	// Reference: UAnimSequence::GetRetargetTransforms()

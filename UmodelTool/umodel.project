@@ -33,6 +33,9 @@ sources(MAIN) = {
 	MeshInstance/*.cpp
 	Core/*.cpp
 	$UMODEL/*.cpp
+	libs/imgui/*.cpp
+	libs/imgui/backends/imgui_impl_sdl2.cpp
+	libs/imgui/backends/imgui_impl_opengl2.cpp
 !if "$IS_WINDOWS" eq "1"
 	UI/*.cpp
 	$UMODEL/res/umodel.rc

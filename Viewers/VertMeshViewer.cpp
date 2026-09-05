@@ -198,15 +198,21 @@ void CVertMeshViewer::Draw2D()
 }
 
 
+void CVertMeshViewer::PreDraw3D(float TimeDelta)
+{
+	guard(CVertMeshViewer::PreDraw3D);
+	if (!Inst) return;
+
+	CVertMeshInstance *MeshInst = static_cast<CVertMeshInstance*>(Inst);
+	MeshInst->UpdateAnimation(TimeDelta);
+	unguard;
+}
+
+
 void CVertMeshViewer::Draw3D(float TimeDelta)
 {
 	guard(CVertMeshViewer::Draw3D);
 	assert(Inst);
-
-	CVertMeshInstance *MeshInst = static_cast<CVertMeshInstance*>(Inst);
-
-	// tick animations
-	MeshInst->UpdateAnimation(TimeDelta);
 
 	CMeshViewer::Draw3D(TimeDelta);
 

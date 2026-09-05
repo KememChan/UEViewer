@@ -293,6 +293,23 @@ static void CallExportAnimation(const CAnimSet* Anim)
 	}
 }
 
+static void CallExportSingleAnimation(const CAnimSet* Anim, int SeqIndex)
+{
+	assert(Anim);
+	if (SeqIndex < 0 || SeqIndex >= Anim->Sequences.Num()) return;
+
+	switch (GSettings.Export.SkeletalMeshFormat)
+	{
+	case EExportMeshFormat::md5:
+		ExportSingleMd5Anim(Anim, SeqIndex);
+		break;
+	case EExportMeshFormat::psk:
+	default:
+		ExportSinglePsa(Anim, SeqIndex);
+		break;
+	}
+}
+
 static void RegisterExporters()
 {
 	RegisterExporter<USkeletalMesh>([](const USkeletalMesh* Mesh) { CallExportSkeletalMesh(Mesh->ConvertedMesh); });
@@ -316,6 +333,9 @@ static void RegisterExporters()
 	RegisterExporter<USoundWave>(ExportSoundWave4);
 #endif // UNREAL4
 	RegisterExporter<UUnrealMaterial>(ExportMaterial);			// register this after Texture/Texture2D exporters
+	RegisterSingleAnimExporter([](const CAnimSet* Anim, int SeqIndex) {
+		CallExportSingleAnimation(Anim, SeqIndex);
+	});
 }
 
 
@@ -1560,6 +1580,28 @@ int main(int argc, const char **argv)
 					targetMesh->Name,
 					targetMesh->Skeleton ? targetMesh->Skeleton->Name : "None",
 					elapsed, animCount);
+
+				if (targetMesh->ConvertedMesh && targetMesh->ConvertedMesh->Lods.Num())
+				{
+					const CSkelMeshLod& lod = targetMesh->ConvertedMesh->Lods[0];
+					for (int s = 0; s < lod.Sections.Num(); s++)
+					{
+						const CMeshSection& sec = lod.Sections[s];
+						appPrintf("  [Section %d] Material: %s (%s)\n", s,
+							sec.Material ? sec.Material->Name : "null",
+							sec.Material ? sec.Material->GetClassName() : "");
+						if (sec.Material)
+						{
+							CMaterialParams p;
+							sec.Material->GetParams(p);
+							appPrintf("     Diffuse: %s\n", p.Diffuse ? p.Diffuse->Name : "null");
+							appPrintf("     Normal: %s\n", p.Normal ? p.Normal->Name : "null");
+							appPrintf("     SpecPower: %s\n", p.SpecPower ? p.SpecPower->Name : "null");
+							appPrintf("     Opacity: %s\n", p.Opacity ? p.Opacity->Name : "null");
+							appPrintf("     Emissive: %s\n", p.Emissive ? p.Emissive->Name : "null");
+						}
+					}
+				}
 			}
 		}
 		GApplication.ReleaseViewerAndObjects();

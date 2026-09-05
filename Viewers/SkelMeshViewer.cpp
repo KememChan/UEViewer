@@ -424,6 +424,11 @@ void CSkelMeshViewer::Draw2D()
 		const CAnimSequence* Seq = MeshInst->GetAnim(0);
 		if (Seq)
 		{
+			const char* AdditiveText = "";
+			if (Seq->bAdditive)
+			{
+				AdditiveText = (Seq->AdditiveType == 2) ? S_YELLOW" [additive: mesh]" : S_GREEN" [additive: local]";
+			}
 			if (Seq->OriginalSequence)
 			{
 				// Draw sequence name as hyperlink
@@ -431,7 +436,7 @@ void CSkelMeshViewer::Draw2D()
 					"(" S_HYPERLINK("%s") ") "
 					S_GREEN " Rate:" S_WHITE " %g " S_GREEN "Frames:" S_WHITE " %d%s",
 					AnimIndex+1, MeshInst->GetAnimCount(), *Seq->Name, Seq->Rate, Seq->NumFrames,
-					Seq->bAdditive ? S_RED" (additive)" : "");
+					AdditiveText);
 				if (bClicked)
 					JumpTo(Seq->OriginalSequence);
 			}
@@ -440,7 +445,7 @@ void CSkelMeshViewer::Draw2D()
 				DrawTextBottomLeft(S_GREEN "Anim:" S_WHITE " %d/%d (%s)"
 					S_GREEN " Rate:" S_WHITE " %g " S_GREEN "Frames:" S_WHITE " %d%s",
 					AnimIndex+1, MeshInst->GetAnimCount(), *Seq->Name, Seq->Rate, Seq->NumFrames,
-					Seq->bAdditive ? S_RED" (additive)" : "");
+					AdditiveText);
 			}
 			DrawTextBottomRight(S_GREEN "Frame:" S_WHITE " %4.1f/%d", MeshInst->GetAnimFrame(0), Seq->NumFrames);
 #if ANIM_DEBUG_INFO
@@ -471,15 +476,29 @@ void CSkelMeshViewer::Draw2D()
 }
 
 
+void CSkelMeshViewer::PreDraw3D(float TimeDelta)
+{
+	guard(CSkelMeshViewer::PreDraw3D);
+	if (!Inst) return;
+
+	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
+	MeshInst->UpdateAnimation(TimeDelta);
+
+	for (CSkelMeshInstance* mesh : TaggedMeshes)
+	{
+		if (mesh->pMesh == MeshInst->pMesh) continue;
+		mesh->UpdateAnimation(TimeDelta);
+	}
+	unguard;
+}
+
+
 void CSkelMeshViewer::Draw3D(float TimeDelta)
 {
 	guard(CSkelMeshViewer::Draw3D);
 	assert(Inst);
 
 	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
-
-	// tick animations
-	MeshInst->UpdateAnimation(TimeDelta);
 
 	CSkelMeshInstance* HighlightInstance = NULL;
 	if (HighlightMeshIndex >= 0)
@@ -567,7 +586,6 @@ void CSkelMeshViewer::Draw3D(float TimeDelta)
 	for (CSkelMeshInstance* mesh : TaggedMeshes)
 	{
 		if (mesh->pMesh == MeshInst->pMesh) continue;	// avoid duplicates
-		mesh->UpdateAnimation(TimeDelta);
 
 		if (HighlightInstance != mesh && HighlightInstance != NULL)
 		{
@@ -599,7 +617,7 @@ void CSkelMeshViewer::Draw3D(float TimeDelta)
 	if (ShowAttach)
 		MeshInst->DrawAttachments();
 
-	if (IsFollowingMesh)
+	if (IsFollowingMesh && GCameraMode == CAMERA_MODE_FREE)
 		FocusCameraOnPoint(MeshInst->GetMeshOrigin());
 
 	unguard;
@@ -747,9 +765,7 @@ void CSkelMeshViewer::ProcessKey(unsigned key)
 	case ' ':
 		if (AnimIndex >= 0)
 		{
-			MeshInst->PlayAnim(AnimName);
-			for (CSkelMeshInstance* mesh : TaggedMeshes)
-				mesh->PlayAnim(AnimName);
+			TogglePlayPause();
 		}
 		break;
 	case 'x':
@@ -850,6 +866,7 @@ void CSkelMeshViewer::ProcessKey(unsigned key)
 		break;
 
 	case 'f':
+		FocusCameraOnPoint(MeshInst->GetMeshOrigin());
 		IsFollowingMesh = true;
 		break;
 
@@ -1657,6 +1674,104 @@ void CSkelMeshViewer::ProcessKeyUp(unsigned key)
 	default:
 		CMeshViewer::ProcessKeyUp(key);
 	}
+}
+
+
+void CSkelMeshViewer::SelectAnim(int index)
+{
+	guard(CSkelMeshViewer::SelectAnim);
+	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
+	if (!MeshInst) return;
+	int NumAnims = MeshInst->GetAnimCount();
+	if (index < -1 || index >= NumAnims) return;
+	AnimIndex = index;
+	const char* AnimName = MeshInst->GetAnimName(AnimIndex);
+	MeshInst->TweenAnim(AnimName, 0.25f);
+	for (CSkelMeshInstance* mesh : TaggedMeshes)
+		mesh->TweenAnim(AnimName, 0.25f);
+	unguard;
+}
+
+void CSkelMeshViewer::PlayCurrentAnim(bool bLoop, float speed)
+{
+	guard(CSkelMeshViewer::PlayCurrentAnim);
+	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
+	if (!MeshInst || AnimIndex < 0) return;
+	const char* AnimName = MeshInst->GetAnimName(AnimIndex);
+	if (!AnimName) return;
+	if (bLoop)
+	{
+		MeshInst->LoopAnim(AnimName, speed);
+		for (CSkelMeshInstance* mesh : TaggedMeshes)
+			mesh->LoopAnim(AnimName, speed);
+	}
+	else
+	{
+		MeshInst->PlayAnim(AnimName, speed);
+		for (CSkelMeshInstance* mesh : TaggedMeshes)
+			mesh->PlayAnim(AnimName, speed);
+	}
+	unguard;
+}
+
+void CSkelMeshViewer::SetAnimSpeed(float speed)
+{
+	guard(CSkelMeshViewer::SetAnimSpeed);
+	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
+	if (!MeshInst) return;
+	MeshInst->SetAnimRate(speed);
+	for (CSkelMeshInstance* mesh : TaggedMeshes)
+		mesh->SetAnimRate(speed);
+	unguard;
+}
+
+void CSkelMeshViewer::PauseCurrentAnim()
+{
+	guard(CSkelMeshViewer::PauseCurrentAnim);
+	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
+	if (!MeshInst) return;
+	float Frame = MeshInst->GetAnimFrame(0);
+	MeshInst->FreezeAnimAt(Frame);
+	for (CSkelMeshInstance* mesh : TaggedMeshes)
+		mesh->FreezeAnimAt(Frame);
+	unguard;
+}
+
+void CSkelMeshViewer::TogglePlayPause(bool bLoop, float speed)
+{
+	guard(CSkelMeshViewer::TogglePlayPause);
+	if (IsAnimPlaying())
+		PauseCurrentAnim();
+	else
+		PlayCurrentAnim(bLoop, speed);
+	unguard;
+}
+
+bool CSkelMeshViewer::IsAnimPlaying() const
+{
+	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
+	if (!MeshInst) return false;
+	return MeshInst->GetAnimRate(0) != 0.0f;
+}
+
+void CSkelMeshViewer::SetAnimFrame(float Frame)
+{
+	guard(CSkelMeshViewer::SetAnimFrame);
+	CSkelMeshInstance *MeshInst = static_cast<CSkelMeshInstance*>(Inst);
+	if (!MeshInst) return;
+	MeshInst->FreezeAnimAt(Frame);
+	for (CSkelMeshInstance* mesh : TaggedMeshes)
+		mesh->FreezeAnimAt(Frame);
+	unguard;
+}
+
+void CSkelMeshViewer::ExportAnimation(int index)
+{
+	guard(CSkelMeshViewer::ExportAnimation);
+	if (!Anim || index < 0 || index >= Anim->Sequences.Num()) return;
+
+	ExportSingleAnimation(Anim, index);
+	unguard;
 }
 
 

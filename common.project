@@ -96,7 +96,7 @@ DEFINES = $STDDEFS
 #	Third-party libraries
 #------------------------------------------------
 
-LIBINCLUDES = $R/libs/include $R/libs
+LIBINCLUDES = $R/libs/include $R/libs $R/libs/imgui $R/libs/imgui/backends
 
 OBJDIR = $R/obj/libs-$PLATFORM
 
