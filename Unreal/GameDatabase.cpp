@@ -416,6 +416,9 @@ const GameInfo GListOfGames[] = {
 #	if SEAOFTHIEVES
 		G("Sea of Thieves", sot, GAME_SeaOfThieves),
 #	endif
+#	if WUTHERING_WAVES
+		G("Wuthering Waves", wuwa, GAME_WutheringWaves),
+#	endif
 #endif // UNREAL4
 
 	// end marker

@@ -626,9 +626,11 @@ struct FDuplicatedVerticesBuffer
 {
 	friend FArchive& operator<<(FArchive& Ar, FDuplicatedVerticesBuffer& B)
 	{
+		guard(FDuplicatedVerticesBuffer<<);
 		SkipFixedArray(Ar, sizeof(int32));					// TArray<int32>
 		SkipFixedArray(Ar, sizeof(uint32) + sizeof(uint32)); // TArray<FIndexLengthPair>
 		return Ar;
+		unguard;
 	}
 };
 
@@ -842,8 +844,38 @@ struct FSkelMeshSection4
 		Ar << S.BaseVertexIndex;
 
 		TArray<FApexClothPhysToRenderVertData> ClothMappingData;
-		Ar << ClothMappingData;
-		S.HasClothData = (ClothMappingData.Num() > 0);
+#if WUTHERING_WAVES
+		if (Ar.Game == GAME_WutheringWaves)
+		{
+			// Safe reading of ClothMappingData count for Wuthering Waves
+			int ClothCount = 0;
+			if (GameUsesFCompactIndex(Ar))
+				Ar << AR_INDEX(ClothCount);
+			else
+				Ar << ClothCount;
+
+			if (ClothCount > 0 && ClothCount < 65536)
+			{
+				ClothMappingData.Empty(ClothCount);
+				for (int i = 0; i < ClothCount; i++)
+				{
+					FApexClothPhysToRenderVertData D;
+					Ar << D;
+					ClothMappingData.Add(D);
+				}
+			}
+			else if (ClothCount < 0)
+			{
+				appPrintf("WARNING: wuwa invalid ClothMappingData count %d\n", ClothCount);
+			}
+			S.HasClothData = (ClothMappingData.Num() > 0);
+		}
+		else
+#endif // WUTHERING_WAVES
+		{
+			Ar << ClothMappingData;
+			S.HasClothData = (ClothMappingData.Num() > 0);
+		}
 
 		Ar << S.BoneMap;
 		Ar << S.NumVertices;
@@ -858,6 +890,17 @@ struct FSkelMeshSection4
 #if PARAGON
 		if (Ar.Game == GAME_Paragon) return;
 #endif
+
+#if WUTHERING_WAVES
+		if (Ar.Game == GAME_WutheringWaves)
+		{
+			// In Wuthering Waves cooked shipping packages, DuplicatedVerticesBuffer is not serialized.
+			// However, ClassStripFlags may have bit 1 cleared on certain character models (e.g. Fuludelisi),
+			// which would cause standard UE4 deserializer to mistakenly attempt reading DuplicatedVerticesBuffer.
+			Ar << S.bDisabled;
+			return;
+		}
+#endif // WUTHERING_WAVES
 
 		if (Ar.Game < GAME_UE4(23) || !StripFlags.IsClassDataStripped(1)) // DuplicatedVertices, introduced in UE4.23
 		{

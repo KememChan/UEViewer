@@ -147,9 +147,31 @@ struct DummyItem	// non-serializeable
 
 void SkipFixedArray(FArchive &Ar, int ItemSize)
 {
-	TArray<DummyItem> DummyArray;
-	Ar << DummyArray;
-	Ar.Seek(Ar.Tell() + DummyArray.Num() * ItemSize);
+	guard(SkipFixedArray);
+	int Count = 0;
+	if (GameUsesFCompactIndex(Ar))
+		Ar << AR_INDEX(Count);
+	else
+		Ar << Count;
+
+	if (Count <= 0)
+	{
+		if (Count < 0)
+			appPrintf("WARNING: SkipFixedArray: invalid count %d\n", Count);
+		return;
+	}
+
+	int64 SkipBytes = (int64)Count * ItemSize;
+	int Stopper = Ar.GetStopper();
+	if (Ar.IsLoading && Stopper > 0 && Ar.Tell() + SkipBytes > Stopper)
+	{
+		appPrintf("WARNING: SkipFixedArray: array size %d x %d exceeds buffer\n", Count, ItemSize);
+		Ar.Seek(Stopper);
+		return;
+	}
+
+	Ar.Seek(Ar.Tell() + SkipBytes);
+	unguard;
 }
 
 void SkipLazyArray(FArchive &Ar)
