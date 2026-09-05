@@ -849,10 +849,7 @@ struct FSkelMeshSection4
 		{
 			// Safe reading of ClothMappingData count for Wuthering Waves
 			int ClothCount = 0;
-			if (GameUsesFCompactIndex(Ar))
-				Ar << AR_INDEX(ClothCount);
-			else
-				Ar << ClothCount;
+			Ar << ClothCount;
 
 			if (ClothCount > 0 && ClothCount < 65536)
 			{
